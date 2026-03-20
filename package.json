@@ -1,5 +1,9 @@
 {
+  "private": true,
   "license": "ISC",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"

@@ -1,0 +1,27 @@
+{
+  "name": "@verifiable-ad-protocol/ad-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "ad-mcp": "dist/cli/init.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@verifiable-ad-protocol/core": "0.1.0",
+    "@lynq/lynq": "^0.13.0",
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/web3.js": "^1.95.0",
+    "better-sqlite3": "^11.0.0",
+    "bn.js": "^5.2.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "vitest": "^1.0.0",
+    "typescript": "^5.0.0"
+  }
+}

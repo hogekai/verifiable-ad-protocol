@@ -112,3 +112,44 @@ pub struct ImpressionMessage {
     pub context_hash: [u8; 32],
     pub timestamp: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_lang::AnchorSerialize;
+
+    #[test]
+    fn test_impression_message_borsh_hex() {
+        let msg = ImpressionMessage {
+            ad_id: Pubkey::new_from_array([1u8; 32]),
+            screener: Pubkey::new_from_array([2u8; 32]),
+            curator: Pubkey::new_from_array([3u8; 32]),
+            agent: Pubkey::new_from_array([4u8; 32]),
+            impression_nonce: 42,
+            context_hash: [0xAB; 32],
+            timestamp: 1700000000,
+        };
+        let bytes = msg.try_to_vec().unwrap();
+        assert_eq!(bytes.len(), 176);
+
+        // Cross-verify with TypeScript packages/core/tests/message.test.ts
+        let expected_hex = format!(
+            "{}{}{}{}{}{}{}",
+            "01".repeat(32),
+            "02".repeat(32),
+            "03".repeat(32),
+            "04".repeat(32),
+            "2a00000000000000",
+            "ab".repeat(32),
+            "00f1536500000000",
+        );
+
+        let actual_hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(actual_hex, expected_hex, "Borsh hex mismatch between Rust and TypeScript");
+
+        // Also verify SHA-256 hash
+        let hash = anchor_lang::solana_program::hash::hash(&bytes);
+        println!("BORSH_HEX={}", actual_hex);
+        println!("SHA256_HEX={}", hash);
+    }
+}
