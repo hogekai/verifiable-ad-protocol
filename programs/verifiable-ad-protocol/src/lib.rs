@@ -91,6 +91,9 @@ pub mod verifiable_ad_protocol {
         ad.is_active = true;
         ad.total_impressions = 0;
         ad.created_at = Clock::get()?.unix_timestamp;
+        ad.impressions_last_hour = 0;
+        ad.last_hour_slot = 0;
+        ad.max_impressions_per_hour = DEFAULT_MAX_IMPRESSIONS_PER_HOUR;
         ad.bump = ctx.bumps.ad_account;
         Ok(())
     }
@@ -124,6 +127,7 @@ pub mod verifiable_ad_protocol {
     pub fn register_curator(
         ctx: Context<RegisterCurator>,
         metadata_uri: String,
+        rate_limit_max_per_window: u32,
     ) -> Result<()> {
         require!(
             metadata_uri.len() <= MAX_METADATA_URI_LENGTH,
@@ -135,6 +139,9 @@ pub mod verifiable_ad_protocol {
         curator.metadata_uri = metadata_uri;
         curator.registered_at = Clock::get()?.unix_timestamp;
         curator.total_verified_impressions = 0;
+        curator.last_impression_slot = 0;
+        curator.impressions_in_window = 0;
+        curator.rate_limit_max_per_window = rate_limit_max_per_window;
         curator.bump = ctx.bumps.curator_account;
         Ok(())
     }
@@ -146,6 +153,7 @@ pub mod verifiable_ad_protocol {
         authorized_screeners: Vec<Pubkey>,
         excluded_curators: Vec<Pubkey>,
         is_active: bool,
+        max_impressions_per_hour: u32,
     ) -> Result<()> {
         require!(
             max_screener_share_bps <= 10000,
@@ -166,6 +174,7 @@ pub mod verifiable_ad_protocol {
         ad.authorized_screeners = authorized_screeners;
         ad.excluded_curators = excluded_curators;
         ad.is_active = is_active;
+        ad.max_impressions_per_hour = max_impressions_per_hour;
         Ok(())
     }
 
@@ -192,6 +201,7 @@ pub mod verifiable_ad_protocol {
     pub fn update_curator(
         ctx: Context<UpdateCurator>,
         metadata_uri: String,
+        rate_limit_max_per_window: u32,
     ) -> Result<()> {
         require!(
             metadata_uri.len() <= MAX_METADATA_URI_LENGTH,
@@ -200,6 +210,7 @@ pub mod verifiable_ad_protocol {
 
         let curator = &mut ctx.accounts.curator_account;
         curator.metadata_uri = metadata_uri;
+        curator.rate_limit_max_per_window = rate_limit_max_per_window;
         Ok(())
     }
 
@@ -235,14 +246,26 @@ pub mod verifiable_ad_protocol {
         chunk_index: u16,
         agent_pubkey: Pubkey,
     ) -> Result<()> {
-        let ad = &ctx.accounts.ad_account;
-        let screener = &ctx.accounts.screener_account;
-        let curator_acc = &ctx.accounts.curator_account;
+        // Copy values needed for checks to avoid borrow conflicts with later &mut
+        let ad_is_active = ctx.accounts.ad_account.is_active;
+        let ad_authorized_screeners = ctx.accounts.ad_account.authorized_screeners.clone();
+        let ad_excluded_curators = ctx.accounts.ad_account.excluded_curators.clone();
+        let ad_max_screener_share_bps = ctx.accounts.ad_account.max_screener_share_bps;
+        let ad_max_cpm_lamports = ctx.accounts.ad_account.max_cpm_lamports;
+        let ad_spent_lamports = ctx.accounts.ad_account.spent_lamports;
+        let ad_budget_lamports = ctx.accounts.ad_account.budget_lamports;
+        let ad_key = ctx.accounts.ad_account.key();
+        let screener_key = ctx.accounts.screener_account.screener;
+        let screener_endorsed = ctx.accounts.screener_account.endorsed_curators.clone();
+        let screener_declared_share_bps = ctx.accounts.screener_account.declared_share_bps;
+        let curator_key = ctx.accounts.curator_account.curator;
 
         // ── 0. Basic checks ──────────────────────────────────────────
-        require!(ad.is_active, ProtocolError::AdNotActive);
+        require!(ad_is_active, ProtocolError::AdNotActive);
 
-        let now = Clock::get()?.unix_timestamp;
+        let clock = Clock::get()?;
+        let now = clock.unix_timestamp;
+        let current_slot = clock.slot;
         require!(
             now - timestamp <= MAX_TIMESTAMP_AGE_SECONDS,
             ProtocolError::TimestampTooOld
@@ -254,31 +277,74 @@ pub mod verifiable_ad_protocol {
 
         // ── 1. Authorization checks ──────────────────────────────────
         require!(
-            ad.authorized_screeners.contains(&screener.screener),
+            ad_authorized_screeners.contains(&screener_key),
             ProtocolError::UnauthorizedScreener
         );
         require!(
-            screener.endorsed_curators.contains(&curator_acc.curator),
+            screener_endorsed.contains(&curator_key),
             ProtocolError::UnauthorizedCurator
         );
         require!(
-            !ad.excluded_curators.contains(&curator_acc.curator),
+            !ad_excluded_curators.contains(&curator_key),
             ProtocolError::ExcludedCurator
         );
         require!(
-            agent_pubkey != screener.screener && agent_pubkey != curator_acc.curator,
+            agent_pubkey != screener_key && agent_pubkey != curator_key,
             ProtocolError::AgentIsScreenerOrCurator
         );
         require!(
-            screener.declared_share_bps <= ad.max_screener_share_bps,
+            screener_declared_share_bps <= ad_max_screener_share_bps,
             ProtocolError::ExceededScreenerShare
         );
 
+        // ── 1b. Rate limit checks ────────────────────────────────────
+        // Curator rate limit
+        {
+            let curator_mut = &mut ctx.accounts.curator_account;
+            if current_slot.saturating_sub(curator_mut.last_impression_slot)
+                > DEFAULT_RATE_LIMIT_WINDOW_SLOTS
+            {
+                curator_mut.impressions_in_window = 1;
+            } else {
+                curator_mut.impressions_in_window = curator_mut
+                    .impressions_in_window
+                    .checked_add(1)
+                    .ok_or(ProtocolError::ArithmeticOverflow)?;
+            }
+            require!(
+                curator_mut.impressions_in_window <= curator_mut.rate_limit_max_per_window,
+                ProtocolError::RateLimitExceeded
+            );
+            curator_mut.last_impression_slot = current_slot;
+            curator_mut.total_verified_impressions = curator_mut
+                .total_verified_impressions
+                .checked_add(1)
+                .ok_or(ProtocolError::ArithmeticOverflow)?;
+        }
+
+        // Ad hourly cap
+        {
+            let ad_mut = &mut ctx.accounts.ad_account;
+            if current_slot.saturating_sub(ad_mut.last_hour_slot) > SLOTS_PER_HOUR {
+                ad_mut.impressions_last_hour = 1;
+            } else {
+                ad_mut.impressions_last_hour = ad_mut
+                    .impressions_last_hour
+                    .checked_add(1)
+                    .ok_or(ProtocolError::ArithmeticOverflow)?;
+            }
+            require!(
+                ad_mut.impressions_last_hour <= ad_mut.max_impressions_per_hour,
+                ProtocolError::AdRateLimitExceeded
+            );
+            ad_mut.last_hour_slot = current_slot;
+        }
+
         // ── 2. Build canonical message and verify Ed25519 signatures ─
         let message = ImpressionMessage {
-            ad_id: ctx.accounts.ad_account.key(),
-            screener: screener.screener,
-            curator: curator_acc.curator,
+            ad_id: ad_key,
+            screener: screener_key,
+            curator: curator_key,
             agent: agent_pubkey,
             impression_nonce,
             context_hash,
@@ -288,14 +354,12 @@ pub mod verifiable_ad_protocol {
             .try_to_vec()
             .map_err(|_| ProtocolError::ArithmeticOverflow)?;
 
-        // Sign the SHA-256 hash of the canonical message (32 bytes) instead of
-        // the full message (176 bytes) to fit 3 Ed25519 ixs within tx size limit.
         let message_hash = anchor_lang::solana_program::hash::hash(&message_bytes);
 
         let instructions_sysvar = &ctx.accounts.instructions_sysvar;
 
-        verify_ed25519_instruction(instructions_sysvar, 0, &screener.screener, message_hash.as_ref())?;
-        verify_ed25519_instruction(instructions_sysvar, 1, &curator_acc.curator, message_hash.as_ref())?;
+        verify_ed25519_instruction(instructions_sysvar, 0, &screener_key, message_hash.as_ref())?;
+        verify_ed25519_instruction(instructions_sysvar, 1, &curator_key, message_hash.as_ref())?;
         verify_ed25519_instruction(instructions_sysvar, 2, &agent_pubkey, message_hash.as_ref())?;
 
         // ── 3. Bitmap deduplication ──────────────────────────────────
@@ -311,10 +375,9 @@ pub mod verifiable_ad_protocol {
 
         // ── 4. Reward calculation ────────────────────────────────────
         let protocol_fee_bps = ctx.accounts.protocol_config.protocol_fee_bps as u64;
-        let declared_share_bps = screener.declared_share_bps as u64;
+        let declared_share_bps = screener_declared_share_bps as u64;
 
-        let per_impression = ad
-            .max_cpm_lamports
+        let per_impression = ad_max_cpm_lamports
             .checked_div(1000)
             .ok_or(ProtocolError::ArithmeticOverflow)?;
 
@@ -339,13 +402,11 @@ pub mod verifiable_ad_protocol {
             .ok_or(ProtocolError::ArithmeticOverflow)?;
 
         // ── 5. Budget & deposit checks ───────────────────────────────
-        let new_spent = ad
-            .spent_lamports
+        let new_spent = ad_spent_lamports
             .checked_add(per_impression)
             .ok_or(ProtocolError::ArithmeticOverflow)?;
-        require!(new_spent <= ad.budget_lamports, ProtocolError::InsufficientBudget);
+        require!(new_spent <= ad_budget_lamports, ProtocolError::InsufficientBudget);
 
-        // Deposit must cover both rewards AND submission fee
         let submission_fee = SUBMISSION_FEE_LAMPORTS;
         let total_deduction = per_impression
             .checked_add(submission_fee)
@@ -392,12 +453,6 @@ pub mod verifiable_ad_protocol {
         ad.spent_lamports = new_spent;
         ad.total_impressions = ad
             .total_impressions
-            .checked_add(1)
-            .ok_or(ProtocolError::ArithmeticOverflow)?;
-
-        let curator_mut = &mut ctx.accounts.curator_account;
-        curator_mut.total_verified_impressions = curator_mut
-            .total_verified_impressions
             .checked_add(1)
             .ok_or(ProtocolError::ArithmeticOverflow)?;
 

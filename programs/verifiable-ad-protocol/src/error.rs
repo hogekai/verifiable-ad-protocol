@@ -71,4 +71,11 @@ pub enum ProtocolError {
 
     #[msg("Ad is not active")]
     AdNotActive,
+
+    // Sub-phase 3: Rate limiting
+    #[msg("Curator rate limit exceeded")]
+    RateLimitExceeded,
+
+    #[msg("Ad hourly impression cap exceeded")]
+    AdRateLimitExceeded,
 }

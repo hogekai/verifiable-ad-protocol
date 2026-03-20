@@ -301,8 +301,8 @@ Agentがオンチェーン記録の主体であることが、最も強い構造
 
 **ハードな制約（PoCから実装）：**
 
-- **インプレッションのレートリミット：** 1 Curatorあたりの単位時間あたりクレーム上限をコントラクトに設定
-- **広告主budget単位のガス消費上限：** budget残高に対する単位時間あたりのガス消費比率の上限をコントラクトに設定。結託Curatorによるbudgetガス枯渇攻撃を防止
+- **Curator rate limit：** CuratorAccountに `rate_limit_max_per_window` を保持。Curatorごとに設定可能（register_curator / update_curatorで変更）。デフォルト100 impressions / ~1分（DEFAULT_RATE_LIMIT_WINDOW_SLOTS = 150 slots）。ウィンドウ超過で `RateLimitExceeded` エラー
+- **Ad hourly cap：** AdAccountに `max_impressions_per_hour` を保持。広告主がregister_ad / update_adで設定。デフォルト10,000 / hour（SLOTS_PER_HOUR = 9,000 slots）。超過で `AdRateLimitExceeded` エラー
 - **Agent Sybil対策：** Phase 1では3者署名のcryptographic proofのみで検証。Agent事前登録（AgentRegistry）はover-engineeringとして棄却。Phase 2以降でAI提供者アテステーション等と合わせて検討
 
 **スラッシュ機構（Phase 1はスロットのみ）：**

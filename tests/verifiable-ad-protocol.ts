@@ -244,6 +244,8 @@ describe("verifiable-ad-protocol", () => {
       expect(ad.isActive).to.equal(true);
       expect(ad.totalImpressions.toNumber()).to.equal(0);
       expect(ad.createdAt.toNumber()).to.be.greaterThan(0);
+      expect(ad.maxImpressionsPerHour).to.equal(10_000);
+      expect(ad.impressionsLastHour).to.equal(0);
     });
 
     it("fails with budget_lamports = 0", async () => {
@@ -406,7 +408,7 @@ describe("verifiable-ad-protocol", () => {
       const [curatorPda] = findCuratorPda(curator.publicKey);
 
       await program.methods
-        .registerCurator("https://example.com/meta.json")
+        .registerCurator("https://example.com/meta.json", 100)
         .accounts({
           curator: curator.publicKey,
           curatorAccount: curatorPda,
@@ -435,7 +437,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .registerCurator(longUri)
+          .registerCurator(longUri, 100)
           .accounts({
             curator: newCurator.publicKey,
             curatorAccount: curatorPda,
@@ -457,7 +459,7 @@ describe("verifiable-ad-protocol", () => {
       const [adPda] = findAdPda(advertiser.publicKey, 0);
 
       await program.methods
-        .updateAd(new BN(20_000_000), 3000, [screener.publicKey], [], false)
+        .updateAd(new BN(20_000_000), 3000, [screener.publicKey], [], false, 10_000)
         .accounts({
           advertiser: advertiser.publicKey,
           adAccount: adPda,
@@ -480,7 +482,8 @@ describe("verifiable-ad-protocol", () => {
           3000,
           [screener.publicKey],
           [],
-          true
+          true,
+          10_000
         )
         .accounts({
           advertiser: advertiser.publicKey,
@@ -500,7 +503,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .updateAd(new BN(20_000_000), 3000, [], [], true)
+          .updateAd(new BN(20_000_000), 3000, [], [], true, 10_000)
           .accounts({
             advertiser: imposter.publicKey,
             adAccount: adPda,
@@ -563,7 +566,7 @@ describe("verifiable-ad-protocol", () => {
       const [curatorPda] = findCuratorPda(curator.publicKey);
 
       await program.methods
-        .updateCurator("https://example.com/updated-meta.json")
+        .updateCurator("https://example.com/updated-meta.json", 100)
         .accounts({
           curator: curator.publicKey,
           curatorAccount: curatorPda,
@@ -714,7 +717,8 @@ describe("verifiable-ad-protocol", () => {
           2000,
           [screener.publicKey],
           [],
-          true
+          true,
+          10_000
         )
         .accounts({
           advertiser: advertiser.publicKey,
@@ -990,7 +994,7 @@ describe("verifiable-ad-protocol", () => {
 
       // Deactivate ad
       await program.methods
-        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], false)
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], false, 10_000)
         .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
         .signers([advertiser])
         .rpc();
@@ -1042,7 +1046,7 @@ describe("verifiable-ad-protocol", () => {
 
       // Re-activate ad for subsequent tests
       await program.methods
-        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], true)
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], true, 10_000)
         .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
         .signers([advertiser])
         .rpc();
@@ -1053,7 +1057,7 @@ describe("verifiable-ad-protocol", () => {
 
       // Add curator to excluded list
       await program.methods
-        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [curator.publicKey], true)
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [curator.publicKey], true, 10_000)
         .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
         .signers([advertiser])
         .rpc();
@@ -1105,7 +1109,7 @@ describe("verifiable-ad-protocol", () => {
 
       // Remove curator from excluded list
       await program.methods
-        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], true)
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], true, 10_000)
         .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
         .signers([advertiser])
         .rpc();
@@ -1158,6 +1162,213 @@ describe("verifiable-ad-protocol", () => {
       } catch (err: any) {
         expect(err.toString()).to.include("SignatureVerificationFailed");
       }
+    });
+
+    it("fails when ad hourly cap is exceeded", async () => {
+      // Register a new ad with max_impressions_per_hour = 2
+      const adIndex = 10;
+      const [adPda] = findAdPda(advertiser.publicKey, adIndex);
+      await program.methods
+        .registerAd(
+          new BN(adIndex),
+          new BN(LAMPORTS_PER_SOL),
+          new BN(10_000_000),
+          2000,
+          [screener.publicKey],
+          []
+        )
+        .accounts({
+          advertiser: advertiser.publicKey,
+          adAccount: adPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([advertiser])
+        .rpc();
+
+      // Set max_impressions_per_hour = 2
+      await program.methods
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], true, 2)
+        .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
+        .signers([advertiser])
+        .rpc();
+
+      // Initialize bitmap
+      const [bitmapPda] = findBitmapPda(adPda, 0);
+      await program.methods
+        .initializeBitmap(0)
+        .accounts({
+          adAccount: adPda,
+          impressionBitmap: bitmapPda,
+          payer: advertiser.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([advertiser])
+        .rpc();
+
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      // Helper to send impression
+      async function sendImpression(nonce: number) {
+        const n = new BN(nonce);
+        const contextHash = Buffer.alloc(32, nonce);
+        const ts = new BN(Math.floor(Date.now() / 1000));
+        const message = buildCanonicalMessage(
+          adPda, screener.publicKey, curator.publicKey, agent.publicKey,
+          n, contextHash, ts
+        );
+        const tx = new Transaction().add(
+          createEd25519Ix(screener.secretKey, message),
+          createEd25519Ix(curator.secretKey, message),
+          createEd25519Ix(agent.secretKey, message),
+          await program.methods
+            .recordImpression(n, Array.from(contextHash), ts, 0, agent.publicKey)
+            .accounts({
+              adAccount: adPda,
+              screenerAccount: screenerPda,
+              curatorAccount: curatorPda,
+              impressionBitmap: bitmapPda,
+              depositAccount: depositPda,
+              protocolConfig: configPda,
+              screenerWallet: screener.publicKey,
+              curatorWallet: curator.publicKey,
+              protocolTreasury: treasury.publicKey,
+              instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+              payer: (provider.wallet as any).payer.publicKey,
+              systemProgram: anchor.web3.SystemProgram.programId,
+            })
+            .instruction()
+        );
+        await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+      }
+
+      // 2 impressions should succeed (hourly cap = 2)
+      await sendImpression(100);
+      await sendImpression(101);
+
+      // 3rd should fail
+      try {
+        await sendImpression(102);
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.toString()).to.include("AdRateLimitExceeded");
+      }
+    });
+
+    it("fails when curator rate limit is exceeded", async () => {
+      // Register a new curator with rate_limit = 3
+      const rateLimitCurator = Keypair.generate();
+      await airdrop(rateLimitCurator.publicKey);
+
+      const [rlCuratorPda] = findCuratorPda(rateLimitCurator.publicKey);
+      await program.methods
+        .registerCurator("https://example.com/rl.json", 3)
+        .accounts({
+          curator: rateLimitCurator.publicKey,
+          curatorAccount: rlCuratorPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([rateLimitCurator])
+        .rpc();
+
+      // Update screener to endorse this curator
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      await program.methods
+        .updateScreener(1500, [curator.publicKey, rateLimitCurator.publicKey])
+        .accounts({ screener: screener.publicKey, screenerAccount: screenerPda })
+        .signers([screener])
+        .rpc();
+
+      // Use a new ad with high hourly cap to avoid that limit
+      const adIndex = 11;
+      const [adPda] = findAdPda(advertiser.publicKey, adIndex);
+      await program.methods
+        .registerAd(
+          new BN(adIndex),
+          new BN(LAMPORTS_PER_SOL),
+          new BN(10_000_000),
+          2000,
+          [screener.publicKey],
+          []
+        )
+        .accounts({
+          advertiser: advertiser.publicKey,
+          adAccount: adPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([advertiser])
+        .rpc();
+
+      // Initialize bitmap
+      const [bitmapPda] = findBitmapPda(adPda, 0);
+      await program.methods
+        .initializeBitmap(0)
+        .accounts({
+          adAccount: adPda,
+          impressionBitmap: bitmapPda,
+          payer: advertiser.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([advertiser])
+        .rpc();
+
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      async function sendImpressionRL(nonce: number) {
+        const n = new BN(nonce);
+        const contextHash = Buffer.alloc(32, nonce);
+        const ts = new BN(Math.floor(Date.now() / 1000));
+        const message = buildCanonicalMessage(
+          adPda, screener.publicKey, rateLimitCurator.publicKey, agent.publicKey,
+          n, contextHash, ts
+        );
+        const tx = new Transaction().add(
+          createEd25519Ix(screener.secretKey, message),
+          createEd25519Ix(rateLimitCurator.secretKey, message),
+          createEd25519Ix(agent.secretKey, message),
+          await program.methods
+            .recordImpression(n, Array.from(contextHash), ts, 0, agent.publicKey)
+            .accounts({
+              adAccount: adPda,
+              screenerAccount: screenerPda,
+              curatorAccount: rlCuratorPda,
+              impressionBitmap: bitmapPda,
+              depositAccount: depositPda,
+              protocolConfig: configPda,
+              screenerWallet: screener.publicKey,
+              curatorWallet: rateLimitCurator.publicKey,
+              protocolTreasury: treasury.publicKey,
+              instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+              payer: (provider.wallet as any).payer.publicKey,
+              systemProgram: anchor.web3.SystemProgram.programId,
+            })
+            .instruction()
+        );
+        await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+      }
+
+      // 3 impressions should succeed (rate limit = 3)
+      await sendImpressionRL(200);
+      await sendImpressionRL(201);
+      await sendImpressionRL(202);
+
+      // 4th should fail
+      try {
+        await sendImpressionRL(203);
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.toString()).to.include("RateLimitExceeded");
+      }
+
+      // Restore screener's endorsed curators
+      await program.methods
+        .updateScreener(1500, [curator.publicKey])
+        .accounts({ screener: screener.publicKey, screenerAccount: screenerPda })
+        .signers([screener])
+        .rpc();
     });
   });
 });

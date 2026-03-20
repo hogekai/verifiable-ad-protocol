@@ -41,11 +41,14 @@ pub struct AdAccount {
     pub is_active: bool,
     pub total_impressions: u64,
     pub created_at: i64,
+    // Sub-phase 3: Hourly cap
+    pub impressions_last_hour: u32,
+    pub last_hour_slot: u64,
+    pub max_impressions_per_hour: u32,
     pub bump: u8,
 }
 
-// space = 8 + 32 + 8 + 8 + 8 + 8 + 2 + (4 + 32*10) + (4 + 32*10) + 1 + 8 + 8 + 1 = 740
-// + 14 (sub-phase 3 fields) + 50 (buffer) = 804
+// space = 740 + 4 + 8 + 4 = 756. Fits within 804 (reserved buffer).
 pub const AD_ACCOUNT_SPACE: usize = 804;
 
 /// Screener (ad quality filter) account.
@@ -74,11 +77,14 @@ pub struct CuratorAccount {
     pub metadata_uri: String,
     pub registered_at: i64,
     pub total_verified_impressions: u64,
+    // Sub-phase 3: Rate limit
+    pub last_impression_slot: u64,
+    pub impressions_in_window: u32,
+    pub rate_limit_max_per_window: u32,
     pub bump: u8,
 }
 
-// space = 8 + 32 + (4 + 200) + 8 + 8 + 1 = 261
-// + 20 (sub-phase 3 fields) + 50 (buffer) = 331
+// space = 261 + 8 + 4 + 4 = 277. Fits within 331 (reserved buffer).
 pub const CURATOR_ACCOUNT_SPACE: usize = 331;
 
 /// Bitmap for impression deduplication per ad.
