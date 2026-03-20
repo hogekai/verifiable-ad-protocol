@@ -1,52 +1,29 @@
 # Verifiable Ad Delivery Protocol on Solana
 
-## アイデア詳細文書 v4 — 概念検証・提案準備用
+## 設計文書 v5 — Phase 1 PoC 完了・Phase 2 準備用
+
+**v4 → v5 の主な変更:**
+- Phase 1 実装で確定した全 design decisions を反映
+- AgentRegistry 削除、Fee payer permissionless、submission fee 分離
+- Ad MCP ↔ wallet の localhost HTTP 通信（elicitation hook 廃止）
+- Screener 署名リアルタイム生成、WalletProvider / ScreenerProvider abstraction
+- 経済試算追加（submission fee breakeven、bitmap rent cost）
+- GTM first 100 users path を具体化
+- 未決定リストに判断基準（trigger）を明示
 
 -----
 
 ## 1. なぜ（Why）
 
-### 1.1 広告インフラの構造的問題
+### 1.1 問題
 
-デジタル広告市場は年間$700B超の規模を持つが、その技術インフラは構造的な欠陥を抱えている。
+デジタル広告（年間$700B超）は「見た側が署名できない」構造問題を持つ。パブリッシャーの自己申告に依存し、年間$84Bのアドフラウドと50-70%の中間搾取が常態化している。BAT/AdEx等の分散型広告もインプレッション検証がオフチェーン（バリデーター/ブラウザの自己申告）で、同じ信頼モデルに戻っている。10年間解けていない。
 
-**寡占構造：** Google/Metaが広告配信・計測・決済の全レイヤーを垂直統合で支配している。パブリッシャーや広告主は、これらの企業が提供するブラックボックスに依存せざるを得ない。IMA SDK（Interactive Media Ads SDK）のような古いプロトコルが事実上の唯一の選択肢となっており、技術的代替が存在しない。
+### 1.2 新しい前提
 
-**広告費の不透明な消失：** プログラマティック広告のサプライチェーンは中間業者が5-6層あり、広告主の$1のうちパブリッシャーに届くのは$0.30-0.50。残りがどこでどう抜かれたか追跡できない。年間$84Bがアドフラウド（広告詐欺）で失われている。根本原因は「見た人間」がウォレットを持たず署名する手段がないため、検証が構造的に不可能であること。
+AIエージェントがウォレットを持つ時代が来る。MCP月間97Mダウンロード（2026年3月）。x402/AP2で決済インフラが整備され、エージェント経由でユーザーもウォレットアドレスを自然に保有する。
 
-**Prebidの技術的負債：** オープンソースのヘッダービディングソリューションであるPrebidは代替を試みたが、既存のOpenRTBエコシステムの上に構築されたため、構造的問題を解決するには至っていない。
-
-### 1.2 分散型広告の試みと失敗
-
-BAT/Brave、AdEx、Adshares等の分散型広告プロジェクトは過去10年間試みられてきたが、全プロジェクトに共通する構造的欠陥がある：
-
-1. **インプレッション検証がオフチェーン** — 決済だけオンチェーン、検証はバリデーターやブラウザの自己申告。既存広告と同じ信頼モデルに戻っている
-1. **ブラウザ/特定クライアントにロックイン** — 汎用性がない
-1. **チキン・アンド・エッグ問題** — パブリッシャーが乗り換える理由がない
-
-**これらの失敗は10年間繰り返されている。根本原因は「見た側が署名手段を持たない」という前提が変わらなかったこと。**
-
-### 1.3 新しい前提：ウォレットの自然な普及と署名可能な参加者
-
-AIエージェントが情報消費の主体になりつつある。MCP（Model Context Protocol）は2026年3月時点で月間97Mダウンロード（Python + TypeScript合計）に達し、Anthropic/OpenAI/Google/Microsoft/Amazonが採用。Linux FoundationにAAIF（Agentic AI Foundation）が設立され、業界標準のインフラとなった。
-
-**x402やMCP層の決済が普及することで、エージェントがウォレットを持つことが当たり前になる。** Coinbase/Google/Cloudflareがこのインフラを急速に整備しており、エージェント経由で一般ユーザーもウォレットアドレスを自然に保有する時代が来る。入金は不要。アドレスだけ持っていれば署名ができる。
-
-**この変化がもたらす新しい前提：**
-
-- **全参加者が署名可能になる** — 「見た」の自己申告ではなく、署名で証明できる
-- **ステートフルなセッション** — MCP層でツール・リソース・タスク単位の操作が可能
-- **プライバシー問題が構造的に解消** — ウォレットアドレスだけで参加でき、個人情報の漏洩リスクがない
-
-**この前提の変化により、分散型広告が10年間解けなかった検証問題が初めて解ける。**
-
-### 1.4 MCP層とHTTP層の補完関係
-
-x402プロトコルはHTTP 402 Payment Requiredステータスコードを使ったオープン決済プロトコル。Cloudflare、Circle、Stripe、AWSがバック。しかしx402はHTTP層の決済であり、URL単位の課金に限定される。MCP層ではツール単位・リソース単位・タスク単位の課金が可能で、セッション内コンテキストも扱える。
-
-広告はステートフルな体験（インプレッション→エンゲージメント→コンバージョン）であり、MCPのセッション内でこそ、ツールアクセスと引き換えに署名させるFreemiumモデルが自然に組み込める。
-
-**x402とMCP層は競合ではなく補完関係。** x402/AP2が決済インフラを敷き、本プロトコルがその上で広告固有の検証問題を解く。
+**この変化で初めて「全参加者が署名可能」になり、分散型広告の検証問題が解ける。** 本プロトコルはx402/AP2が敷いた決済インフラの上で、広告固有のdelivery検証を解く。
 
 -----
 
@@ -54,323 +31,118 @@ x402プロトコルはHTTP 402 Payment Requiredステータスコードを使っ
 
 ### 2.1 プロトコル概要
 
-エージェント環境における広告配信のための、3者署名によるオンチェーン検証プロトコル。Solana上に実装。
+Screener（選別者）・Curator（配信者）・Agent（受信者）の3者がそれぞれEd25519署名を行い、その署名セットをSolana上で検証・記録し、報酬を自動分配する。
 
-**コアとなる主張：** 広告費の流れが完全に可視化される史上初のプロトコル。広告主の$1がどこに行ったか100%追跡可能。全参加者が署名可能であるという新しい前提を活かし、3者署名モデルにより、既存広告では構造的に不可能だったインプレッション検証のオンチェーン化を実現する。
-
-**検証スコープの明示：本プロトコルが検証するのはdelivery（配信到達）であり、viewability（視認）ではない。**
-
-Agent署名は「広告を人間が見た」の証明ではなく「MCPレスポンスを受信し、署名を生成した」という暗号学的に検証可能な事実の証明。視認検証はAgent側UI層の責務であり、プロトコルのスコープ外。3者が独立した秘密鍵で署名しているという事実は、パブリッシャーが一方的に「表示しました」と報告する現行モデルより構造的に強い。既存広告のviewabilityの定義も「ピクセルの50%が1秒間ビューポートに入った」程度の近似であり、業界全体が近似で動いている。本プロトコルは「既存の自己申告より厳密な、暗号学的に検証可能なdelivery証明」を提供する。
+**検証するのはdelivery（配信到達）。** Agent署名は「MCPレスポンスを受信し、署名を生成した」という暗号学的に検証可能な事実の証明。viewability（視認）はAgent側UI層の責務でありprotocolスコープ外。
 
 ### 2.2 アーキテクチャ
 
-**コア原則：署名はオフチェーン（コストゼロ）、オンチェーンは記録と決済のみ。記録の主体はAgent。全コスト広告主負担。**
+**コア原則：署名はオフチェーン（コストゼロ）、オンチェーンは記録と決済のみ。全コスト広告主負担。**
 
 ```
-広告主 → Ad Registry（Solanaプログラム）に広告登録
-   │       ├── budget（予算）
-   │       ├── authorized_screeners（承認済みScreener一覧）
-   │       ├── excluded_curators（配信拒否Curator一覧）
-   │       ├── max_cpm（インプレッション単価上限）
-   │       └── max_screener_share（Screener取り分上限）
-   ↓
-Screener → Ad Registryから広告取得 → 詐欺・低品質フィルタ → DB構築
-   │       ├── 署名①「この広告は正当である」（オフチェーン）
-   │       ├── declared_share（自身の報酬比率宣言、max_screener_share以下）
-   │       ├── コンテキストマッチング（広告主のmax_cpm上限内で適切な広告を選定）
-   │       └── endorsed_curators（品質保証するCurator一覧）
-   │       → 署名①をCuratorに渡す
-   ↓
-Curator（MCP/AIサービス） → DBから広告選定 → エージェントに配信
-   │       └── 署名②「このエージェントにこの広告を配信した」（オフチェーン）
-   │       → 署名①②＋広告データをAgentに渡す
-   ↓
-Agent（エージェント+ウォレット） → 商業情報を受信・処理
-   │       └── Agent（LLM）が ad slot を認識 → Ad MCP.process_ad(slot) を呼ぶ
-   ↓
-Ad MCP（広告専用MCPサーバー） → vaulx と localhost HTTP で直接通信（LLM経由しない）
-   │       ├── canonical message 構築 + SHA-256 hash
-   │       ├── vaulx HTTP: /api/sign-bytes → Agent 署名③取得
-   │       ├── Ed25519 ixs + record_impression ix → tx 組立
-   │       └── vaulx HTTP: /api/sign-and-send-raw-transaction → submit
-   │       → fee payer = 誰でもよい（permissionless）
-   │         submission_feeがdepositからpayerに即時補填（atomic）
-   ↓
-Solanaプログラム → 署名セットを検証 → 報酬自動分配
+Advertiser → register_ad (on-chain) → Ad Registry
+                                        ↓
+Screener → fetch (RPC) → filter → Local DB cache
+                                        ↓
+Curator SDK → build AdSlot → Screener署名① + Curator署名② → inject into MCP response
+                                        ↓
+Service MCP → AdSlot付きレスポンス → Agent (LLM)
+                                        ↓
+Ad MCP → wallet.signBytes(署名③) → tx構築 → wallet.signAndSendRawTx
+                                        ↓
+Solana → Ed25519 ×3 verify → record_impression → 報酬分配
 ```
 
-**Phase 1 の Screener 署名タイミング：** canonical message に agent_pubkey, impression_nonce, timestamp が含まれるため、Screenerは事前署名・DB保存ができない。Phase 1ではScreenerとCuratorを同一プロセスで動かし、CuratorClient.createAdSlot()内で両署名をリアルタイム生成する。Phase 2以降ではScreenerがAPI serverとして動作し、Curatorからの署名リクエストに応答する設計。
+**Phase 1 で確定した設計判断:**
 
-**信頼の委譲モデル（広告主から見た操作は2ステップ）：**
+- **Screener署名はリアルタイム生成。** canonical messageにagent_pubkey, impression_nonce, timestampが含まれるため事前署名不可。Phase 1はScreener/Curatorが同一プロセスでcreateAdSlot()内で両署名を生成。Phase 2でScreener API分離。
+- **Agent事前登録は不要。** Ed25519署名自体がcryptographic proof。AgentRegistryは実装後に削除。
+- **Ad MCP ↔ Wallet通信はlocalhost HTTP + auth token。** LLMを経由しない。MCP injection attackを構造的に排除。
 
-広告主の操作は ① 広告の登録（budget, max_cpm, max_screener_share, excluded_curators）と ② 信頼するScreenerを2-3個選ぶ、以上。Curatorの存在を意識する必要すらない。既存広告のads.txt → sellers.json → supply chainと同構造の信頼チェーン。
-
-**コントラクトの検証ロジック：**
-
-1. screener が ad.authorized_screeners に含まれるか
-1. curator が screener.endorsed_curators に含まれるか
-1. curator が ad.excluded_curators に含まれていないか
-1. screener.declared_share <= ad.max_screener_share か
-1. agent が screener/curator と異なるアドレスか
-1. 重複クレームがないか
-1. depositに報酬+submission_feeの残高があるか
-
-**記録の主体がAgentである理由：**
-
-Curatorにバッチ提出を委ねると、署名の選択的除外、提出タイミングの操作、バッチ内容の不透明性、Curator消失リスクが生じる。これらは既存広告のパブリッシャー自己申告と同じ信頼モデルへの回帰を意味する。Agentが記録主体であることで、Agentがオンチェーンに書き込まない限りインプレッションが存在しない。Curatorがダミーインプレッションを量産しても、Agentが記録しなければカウントゼロ。不正の立証責任が構造的に逆転する。
+**信頼の委譲モデル：** 広告主の操作は ① 広告登録 ② 信頼するScreenerを2-3個選ぶ。以上。コントラクトが自動検証する7項目: authorized_screeners含有、endorsed_curators含有、excluded_curators非含有、declared_share上限、agent≠screener/curator、bitmap重複、timestamp freshness。
 
 ### 2.3 コスト構造
 
-**全コスト広告主負担。他の全参加者はコストゼロで参加できる。**
+**CPM報酬とsubmission feeは完全分離。**
 
 ```
 広告主のdepositからの支出（per impression）:
   ├── CPM報酬（per_impression = max_cpm / 1000）
-  │     ├── Protocol手数料: protocol_fee_bps %（Protocol Treasury）
-  │     ├── Screener: declared_share_bps %（手数料控除後に対して）
+  │     ├── Protocol手数料: protocol_fee_bps %（Treasury）
+  │     ├── Screener: declared_share_bps %（残りに対して）
   │     └── Curator: 残り全額
-  └── Submission Fee（CPM報酬とは完全に別枠）
-        └── payer（tx提出者）に即時補填: SUBMISSION_FEE_LAMPORTS = 5,000 lamports（プログラム定数）
-        └── Solana base feeがほぼ固定のため動的調整は不要。変更時はプログラムupgradeで対応
+  └── Submission Fee: 5,000 lamports（定数）→ payer に即時補填
 
-budget追跡:
-  spent_lamports = CPM報酬のみ追跡（submission_feeは含まない）
-  budget超過判定 = spent_lamports <= budget_lamports
-
-参加者別コスト：
-  広告主:   deposit全額（CPM報酬 + submission_fee）
-  Screener: ゼロ（fee payerになる場合もsubmission_feeで即回収）
-  Curator:  ゼロ
-  Agent:    ゼロ（SOL持ちなら直接submitも可能、submission_feeで即回収）
-
-Fee payer（protocolレベルでは誰でも可。制約なし）:
-  - Agent直接: SOLがあれば。relay不要で最速
-  - Protocol relay: 運営が提供するconvenience layer
-  - Screener relay: Screenerが自前infraで提供
-  - 任意の第三者: permissionless
+budget追跡: spent_lamports = CPM報酬のみ（submission_fee含まない）
 ```
 
-**ガス代の実計算（Phase 1：1tx = 1署名セット）：**
-
-Solanaのオンチェーンコストは2種類存在する。
-
-**① tx fee（トランザクション手数料）：** バリデーターに支払う処理料。約$0.0002/tx。
-
-**② rent-exempt deposit（アカウント保管料）：** Solanaはオンチェーンにデータを永続化する際、アカウントを作成しrent-exempt minimum（家賃免除のための最低残高）を預ける必要がある。アカウントサイズ360 bytes（署名セット級）で約0.00275 SOL ≈ $0.39。1 impressionにつき1アカウント（PDA）を作成するとコスト比率が破綻する。
-
-**重複防止の設計：Bitmapアカウント方式**
-
-1 impressionにつき1 PDAを作成するのではなく、広告主単位のBitmapアカウント（大きなbitフラグ配列）を1つ作成し、各impressionに対応するbit位置をフラグ立てする。Bitmapのrent-exemptコストは初期化時に1回だけ発生し、impression数に対する按分コストは無視できる水準（~$0.000001/impression）になる。
+**Submission fee breakeven 試算（SOL = $100）:**
 
 ```
-Phase 1のimpression記録コスト:
-  tx fee:       $0.0002/impression
-  rent按分:     ~$0.000001/impression（Bitmap方式）
-  合計:         ~$0.0002/impression
+submission_fee = 5,000 lamports = $0.0005
 
-  $10 CPM（≈1.5円/impression）に対して → 2%
-  $2 CPM（≈0.3円/impression）に対して → 10%
+CPM $1.00 → per_impression = 10,000 lamports → fee/reward = 50%  ← breakeven
+CPM $2.00 → per_impression = 20,000 lamports → fee/reward = 25%
+CPM $5.00 → per_impression = 50,000 lamports → fee/reward = 10%  ← healthy
+CPM $10   → per_impression = 100,000 lamports → fee/reward = 5%
 
-低CPM帯ではガス比率が上がるが、Phase 1の検証段階では許容範囲。
-Phase 3のL2移行でtx fee自体を1/10〜1/100に圧縮する。
+結論: CPM $1.00 が breakeven。$5+ で healthy。
+      agent-native ad は premium segment。display ad 業界平均 $2-10。
+      $5 CPM を初期 target とする。
 ```
 
-**既存広告とのコスト比較：**
+**Bitmap rent cost 試算（SOL = $100）:**
 
 ```
-既存プログラマティック広告：
-  広告主 $1.00 → パブリッシャーに届くのは $0.30-0.50（50-70%が中間で消失）
+ImpressionBitmap account: 1,067 bytes
+Solana rent-exempt: ~0.0079 SOL = $0.79 per chunk
+Each chunk = 8,192 impressions
 
-本プロトコル（Screener declared_share 15%の場合）：
-  広告主 $1.00 → Curator（≒パブリッシャー）に $0.84
-  内訳：Screener 15% + Curator 84% + プロトコル手数料 0.5-1% + ガス代
-  → 全フローがオンチェーンで追跡可能
+  per impression rent:    $0.79 / 8,192 = $0.000096
+  10,000 impressions:     ~2 chunks = $1.58
+  1,000,000 impressions:  ~122 chunks = $96.38
+
+  payer: initialize_bitmap の signer（Phase 1 は agent/operator）
+  回収: rent は recoverable（account close で取り戻せる）
+       ※ close instruction は Phase 1 未実装。Phase 2 で追加（P2-13）。
 ```
 
-**スケーリング戦略（State Compression棄却の理由）：**
-
-Solana State Compression（Concurrent Merkle Tree）はコスト圧縮手段として有力に見えるが、本プロトコルの設計哲学と構造的に矛盾する。State Compressionではオンチェーンにroot hashのみを保持し、leafデータの取得をオフチェーンIndexer（Helius, Triton等のDAS APIプロバイダー）に依存する。
-
-本プロトコルは「検証可能性の完全なオンチェーン担保」を存在理由としている。報酬クレームにIndexerの可用性が必要な構造は、Curatorへのバッチ提出委託（2.2で棄却済み）と同種の信頼依存を再導入することになる。Indexerの選択的データ返却拒否、遅延、消失リスクは、既存広告の「プラットフォーム依存」と構造的に等価である。
-
-したがって、スケーリング戦略はState Compressionではなく、Phase 3でのプロトコル専用SVM Rollup（L2）移行を本線とする（6章参照）。L2ではデータ本体がL2チェーンのstate storageに完全に保持され、検証可能性がL2レベルで自己完結する。
+**Fee payer はpermissionless。** `payer: Signer` に制約なし。submission_feeがdepositからpayerにatomic補填される（ERC-4337 bundler patternと同構造）。
 
 ### 2.4 3者の役割
 
-**Screener（選別者）：**
+**Screener（選別者）：** on-chainからAd Registry取得、詐欺/低品質フィルタ（Phase 1 stub）、declared_shareをオンチェーン宣言、endorsed_curatorsで品質管理、rate_limit_max_per_windowをCuratorごとに設定。Phase 2でephemeral keyによるfee payer relay。インセンティブ: CPMのdeclared_share%。
 
-- Ad Registryからオンチェーンの広告登録データを取得
-- 詐欺広告、低品質広告をフィルタリング
-- Curatorが使える品質保証済みDBを構築
-- コンテキストカテゴリと広告のマッチング（広告主のmax_cpm上限内）
-- 署名で「この広告は正当」と保証
-- `declared_share`（自身の報酬比率）をオンチェーンで宣言。広告主の `max_screener_share` を超える宣言はコントラクトが弾く
-- 自分が品質基準を満たすと判断したCuratorを `endorsed_curators` として管理
-- **インセンティブ：** CPMの `declared_share` %。質の悪いCuratorを保証すると広告主から外される
+**Curator（配信者）：** Screener DBから広告取得、コンテキストマッチング、curator-sdkのad() middlewareでMCPレスポンスにAdSlot注入、Screener署名①+Curator署名②をリアルタイム生成。インセンティブ: CPMの残り全額。
 
-**Curator（配信者）：**
+**Agent（受信者）：** 事前登録不要。MCPレスポンスのad_slotsを認識→Ad MCPのprocess_adを呼ぶ。Ad MCPがwalletと直接通信で署名③生成+submit。Freemiumモデルで署名動機を付与。
 
-- ScreenerのDBからエージェント/ユーザーに適した広告を選定
-- MCPツールのレスポンスにcommercial slotを含めて配信
-- 署名で「このエージェントに配信した」と証明
-- 署名①②と広告データをAgentに渡す（Agentがオンチェーン記録するため）
-- どのScreenerと組むかを選択する。`declared_share` が低いScreenerを選べば自身の取り分が増える。ただし品質の高いScreener（良い広告案件を持つ）ならdeclared_shareが高くても組む経済的動機がある
-- **インセンティブ：** CPMの残り（= 100% - declared_share - protocol_fee）
+### 2.5 Curator Metadata
 
-**Agent（受信者・記録者）：**
+CuratorAccountにmetadata_uri（最大200文字）。on-chainにはURIのみ。Phase 1: HTTPS URL。Phase 2: IPFS/Arweaveでimmutable storage。
 
-- エージェントウォレット（vaulx）で署名を生成
-- **オンチェーン記録の主体：** Ad MCP が vaulx と連携し、署名 + tx組立 + submit を自動処理。失敗時はローカルDBに保存しリトライ
-- **事前登録不要。** Ed25519署名のみで参加可能（AgentRegistryは不要）
-- Fee payerは誰でもよく（permissionless）、submission_feeがdepositから即時補填される
-- **署名の動機：** CuratorのMCPツールへのフルアクセスに対する対価。「署名なし→制限付きコンテンツ」「署名あり→広告付きフルアクセス」のFreemiumモデル
-- **ユーザー報酬について：** Agent側への報酬分配はSybil Attack（ダミーAgent量産による報酬搾取）対策の複雑性から棄却
-
-### 2.5 Curator Registry（メディア情報の紐付け）
-
-Ad RegistryとScreener Registryに加え、Curatorの公開プロフィールをオンチェーンレジストリとして管理する。広告主がexcluded_curatorsを設定するにも、Screenerがendorsed_curatorsを選ぶにも、Curatorの情報が可視化されていなければ判断できない。
+### 2.6 価格決定モデル
 
 ```
-Curator Registry（オンチェーン）:
-  ├── curator_pubkey: Pubkey
-  ├── metadata_uri: String              // オフチェーンのメタデータURL
-  ├── registered_at: i64
-  └── total_verified_impressions: u64   // プロトコルが自動カウント
-
-メタデータ（オフチェーン、URIで参照）:
-  ├── name: String                      // MCPサーバー名
-  ├── description: String
-  ├── mcp_endpoint: URL                 // MCPサーバーのエンドポイント
-  ├── content_categories: []            // IAB Content Taxonomy準拠
-  ├── supported_ad_formats: []
-  └── contact: String（任意）
+Ad Registry（広告主）: max_cpm, max_screener_share
+Screener（宣言）:      declared_share（≤ max_screener_share。コントラクトが強制）
+Curator（市場選択）:    declared_shareが低いScreenerを選ぶ経済的動機 → 競争圧力
 ```
 
-**オンチェーンに載るのは `curator_pubkey`、`metadata_uri`、`registered_at`、`total_verified_impressions` のみ。** メタデータ本体はオフチェーン（IPFS、Arweave、または通常のHTTPSエンドポイント）に保持し、URIで参照する。`total_verified_impressions` はプロトコルが署名セット検証時に自動でインクリメントし、Curatorの実績として公開される。
+### 2.7 不正防止メカニズム（Phase 1 実装済み）
 
-**このレジストリは無料で誰でも参照できる。** ウォレットアドレスとメディア情報の紐付けはプロトコルのレジストリ機能であり、SaaSではない。
+**ハードな制約:**
+- Bitmap重複防止: 1,024 bytes/chunk × 8,192 impressions/chunk。impression_nonceからbit位置を計算
+- Curator rate limit: CuratorAccount.rate_limit_max_per_window（デフォルト100/~1分）
+- Ad hourly cap: AdAccount.max_impressions_per_hour（デフォルト10,000。広告主設定可能）
+- Timestamp freshness: ±5分/1分
+- Agent identity: agent ≠ screener ≠ curator
 
-### 2.6 価格決定モデル：3層構造
+**スラッシュ機構:** Phase 1はスロットのみ（slashable: bool, staked_amount: u64）。Phase 2で実装。
 
-**「広告主が上限を、Screenerが宣言を、Curatorが選択を」の3層で価格と報酬が決まる。**
+### 2.8 Ad MCP + Wallet通信
 
-```
-Ad Registry（広告主が設定）:
-  max_cpm: u64              // CPM上限
-  max_screener_share: u16   // Screener取り分上限（例：20%）
-
-Screener Registry（Screenerがオンチェーンで宣言）:
-  declared_share: u16       // 自身の取り分（例：15%、max_screener_share以下）
-
-Curator（市場選択）:
-  Screenerの declared_share を見て、どのScreenerと組むか選ぶ
-```
-
-**なぜこれで回るか：**
-
-- 広告主は `max_screener_share` で中抜き上限のガードレールを敷く
-- Screenerは `declared_share` をオンチェーンで宣言。公開されているため隠せない
-- Curatorは取り分が多いScreenerを選ぶ経済的動機がある → Screener間に `declared_share` を下げる競争圧力がかかる
-- Screenerはフィルタリング品質で差別化できるため、品質が高ければ多少高い `declared_share` でもCuratorが付く
-
-**コントラクトレベルの保証：** `screener.declared_share <= ad.max_screener_share` をコントラクトが強制。Screenerが広告主の上限を超える比率を取ることは構造的に不可能。
-
-将来的にはScreenerのDB内で入札競争（オークション）を導入可能。
-
-### 2.7 ユーザーデータとターゲティング
-
-**プロトコルのデフォルトはデータなし。コンテキストターゲティングをベースとする。**
-
-Curatorは「このAgentがどのMCPツールを呼んだか」「どんなクエリを投げたか」というセッション内コンテキストを知っている。これは個人情報ではない。CuratorがこのコンテキストをIAB Content Taxonomyに基づいてカテゴリ化し、Screenerはカテゴリごとに広告をマッチングする。
-
-オンチェーンに載るものはウォレットアドレス + コンテキストカテゴリのハッシュのみ。個人情報は一切不要。
-
-**オプトインによるデータ共有（プロトコルは機構のみ提供）：**
-
-Agent署名時のオプションフィールドとして `data_consent: bool`（デフォルト false）、`data_endpoint: URL`、`data_scope: enum []` を用意。プロトコルは `data_consent` のboolフラグとそのオンチェーン記録のみを提供する。データの中身、インセンティブの額、交換条件は全てScreenerとAgentの二者間の話でプロトコルは関与しない。
-
-オプトインの同意証拠がオンチェーンに残るため、Screenerが「ユーザーが同意した」と嘘をつけない。GDPRの同意証明がブロックチェーン上にある状態。
-
-`data_consent: false` がデフォルトであることは不変。この機構を使うScreenerはSybil対策を自前で実装する責任がある。
-
-### 2.8 不正防止メカニズム
-
-**コアの防御：3者相互監視構造 + Agentによる記録主体**
-
-Agentがオンチェーン記録の主体であることが、最も強い構造的防御。加えて、信頼の委譲モデルにより全参加者が互いの不正を監視する経済的動機を持つ。
-
-- **Curatorが不正**（ダミーAgent量産、水増し等）→ ダミーAgentが記録するガス代は広告主budgetから出るため、budgetの異常消費として可視化される → 広告主がScreenerに通知 → endorsed_curatorsから除外 → 収益ゼロ
-- **Screenerが不正**（悪質Curator放置等）→ 広告主がauthorized_screenersから除外 → Screener配下の全Curatorも連鎖的に収益喪失
-- **Screener-Curator結託** → 広告主がScreenerごと除外 → 両者の収益ゼロ
-- **広告主が不正**（詐欺広告）→ Screenerがフィルタで弾く
-
-**ハードな制約（PoCから実装）：**
-
-- **Curator rate limit：** CuratorAccountに `rate_limit_max_per_window` を保持。Curatorごとに設定可能（register_curator / update_curatorで変更）。デフォルト100 impressions / ~1分（DEFAULT_RATE_LIMIT_WINDOW_SLOTS = 150 slots）。ウィンドウ超過で `RateLimitExceeded` エラー
-- **Ad hourly cap：** AdAccountに `max_impressions_per_hour` を保持。広告主がregister_ad / update_adで設定。デフォルト10,000 / hour（SLOTS_PER_HOUR = 9,000 slots）。超過で `AdRateLimitExceeded` エラー
-- **Agent Sybil対策：** Phase 1では3者署名のcryptographic proofのみで検証。Agent事前登録（AgentRegistry）はover-engineeringとして棄却。Phase 2以降でAI提供者アテステーション等と合わせて検討
-
-**スラッシュ機構（Phase 1はスロットのみ）：**
-
-コントラクトに `slashable: bool` フラグと `staked_amount: u64` フィールドを設ける。Phase 1では `slashable: false` 固定。スラッシュのトリガー関数は `authority`（Protocol Treasury管理のマルチシグ）からのみ呼び出し可能な設計とする。Phase 1での不正対応は手動（運営が明らかな不正を発見した場合に手動スラッシュ）。DAO化による自動スラッシュはPhase 3以降。
-
-```
-Screener / Curator Registry:
-  staked_amount: u64     // ステーク量
-  slashable: bool        // Phase 1: false固定
-  
-// Phase 1: authority only
-fn slash(authority: Signer, target: Pubkey, amount: u64) -> Result<()> {
-    require!(authority == PROTOCOL_AUTHORITY);
-    // ...
-}
-```
-
-**プロトコルの設計方針：可観測性の確保**
-
-プロトコルは不正検知ロジックを規定しない。代わりにScreener間の競争で検知品質が上がる市場原理を前提とし、プロトコルの責務はオンチェーンデータの可観測性を確保すること。全データがオンチェーンに載るため、不正の痕跡も公開台帳に積み上がり、隠蔽コストが極めて高い。
-
-**将来の追加防御：** AI提供者のアテステーション（Anthropic/OpenAI等が「正規のエージェントインスタンス」と証明する第三者検証）
-
-### 2.9 Ad MCP + vaulx の送信設計
-
-Agent 側は 2つの MCP サーバーで構成される。Phase 1 では 1tx = 1署名セット。バッチ処理は不要。
-
-```
-Agent が接続する MCP:
-  ├── vaulx（wallet MCP。署名 + submit の capability）
-  ├── Ad MCP（広告 brain。tx構築 + 判断。vaulx と localhost HTTP で直接通信）← packages/ad-mcp/
-  └── Service MCP(s)（天気API等。curator-sdk で広告注入。Sub-phase 5）
-
-処理フロー:
-  ① Service MCP → ad slot + 2者署名付きレスポンスを Agent に返す
-  ② Agent（LLM）が ad slot を認識 → Ad MCP.process_ad(slot) を呼ぶ
-  ③ Ad MCP 内部（LLM 経由しない）:
-     - canonical message 構築 + SHA-256 hash（packages/core）
-     - vaulx HTTP: /api/sign-bytes → Agent 署名取得
-     - Ed25519 ixs + record_impression ix → tx 組立
-     - vaulx HTTP: /api/sign-and-send-raw-transaction → submit
-  ④ Ad MCP → Agent に結果返却
-
-  submission_fee により、fee payerは同一tx内で立替分を即回収。
-  立替リスクゼロ（atomic）。
-
-  耐障害性:
-    - 未送信分はローカルDB（SQLite）に永続化
-    - リトライキューで自動リトライ
-
-セキュリティ:
-  - Ad MCP ↔ vaulx: localhost HTTP + WALLET_AUTH_TOKEN
-  - LLM を通さない。MCP injection attack を構造的に排除。
-```
-
-**1txあたりのサイズ見積もり：** 署名セット1件は約360 bytes（Ed25519署名×3 = 192B、Pubkey×3 = 96B、ad_id = 32B、timestamp+context_hash = 40B）。Solanaのtx size上限（1232 bytes）を考慮すると1txに2-3セットが限界であり、バッチの意味が薄い。Phase 1は1tx1セットで十分。
-
-### 2.10 Solana上の経済的成立性
-
-**署名検証の技術的実現性：** SolanaのEd25519 Programにより、任意のEd25519署名をオンチェーンで検証可能。3つの署名を1txのinstruction dataに含めて検証できる。
-
-**Fee payer：** permissionless。誰がtxを提出しても、submission_fee_lamports が deposit から payer に atomic に補填される。Agent、Screener、Curator、任意の第三者がfee payerになれる。SOL直接保有は不要（relay経由も可）。
+localhost HTTP + WALLET_AUTH_TOKEN。LLM非経由。WalletProvider interface: HttpWalletProvider（vaulx等）+ LocalKeypairProvider（テスト用）。任意のwalletと連携可能。
 
 -----
 
@@ -378,354 +150,214 @@ Agent が接続する MCP:
 
 ### 3.1 「ゼロの場所に1円を生む」
 
-既存の広告予算を奪うのではなく、今マネタイズ手段がゼロの領域を狙う。MCPサーバー運営者は「無料で提供するか、サブスクにするか」の二択で困っている。ここに「広告付き無料プラン」という第三の選択肢を持ち込む。
+既存の広告予算を奪うのではなく、MCPサーバー運営者の「無料か有料か」の二択に「広告付き無料プラン」を持ち込む。
 
-### 3.2 CPM型クロスプロモーションから始める
-
-**Phase 1：indie MCPサーバー同士の相互推薦モデル**
-
-MCP Serverを公開している個人開発者同士が「お互いのサービスを推薦し合う」需要は確実に存在する。ここにプロトコルの仕組みを噛ませる。広告主＝パブリッシャーの相互推薦モデルから始めることで、外部の広告主営業が不要。
+### 3.2 GTM: first 100 users path
 
 ```
-MCPサーバーA（天気API）= 広告主 兼 Curator
-  → Ad Registryに「天気APIの宣伝」を登録（広告主として）
-  → 他のMCPサーバーからの広告をレスポンスに含める（Curatorとして）
+Phase A（month 1-2）: Seed — 10 MCP servers
+  → 自分のリポジトリ（lynq, vaulx）+ 知人の MCP 開発者にdirect reach out
+  → curator-sdk の npm install + ad() middleware 3行で統合できることを示す
+  → 最初の「広告」は開発者ツール同士のクロスプロモーション（CPM不要。exposure交換）
+  → 目標: 10 MCP servers が curator-sdk を integrate
 
-MCPサーバーB（翻訳API）= 広告主 兼 Curator
-  → Ad Registryに「翻訳APIの宣伝」を登録（広告主として）
-  → 他のMCPサーバーからの広告をレスポンスに含める（Curatorとして）
+Phase B（month 3-4）: Validate — 100 impressions/day
+  → seed MCP servers に実トラフィックが流れることを確認
+  → CLI の inspect で on-chain 実績を見せる（transparency の proof）
+  → Screener を1人外部から招く（indie developer。quality filter の分散化）
+  → CPM クロスプロモーション開始（$1-5 CPM。SOL建て）
+
+Phase C（month 5-6）: Scale — 100 MCP servers
+  → npm download 数 + GitHub stars で organic growth
+  → MCP directory / marketplace に listing
+  → 外部 advertiser を1社獲得（dev tool company。$5+ CPM）
+  → 目標: 100 MCP servers, 1,000 impressions/day, 1 external advertiser
 ```
 
-3者署名がここで機能する理由：CPMモデルではインプレッションの検証が課金の根拠。「本当に配信されたか」を3者署名で証明することで、相互推薦の参加者間に信頼が生まれる。既存のアフィリエイト（CPA）モデルではコンバージョンが課金トリガーであり、インプレッション検証の付加価値が発揮されない。
+### 3.3 収益モデル
 
-**目的：** エコシステムに金を流してScreener/Curatorの実績データを積む。「このプロトコルでは過去N件のインプレッションが3者署名で検証されており、フラウド率はX%」と数字で語れる状態を作る。
+**Protocol手数料** — 0.5%（protocol_fee_bps）。Treasury（Phase 1: authority管理。Phase 2以降: DAO移行）。ツール・ダッシュボードはオープンソース。
 
-**Phase 2：直接広告主の獲得**
-
-実績データが溜まった段階で、外部のCPM型直接広告主を取りに行く。ここで初めてインプレッション検証の透明性が最大の武器になる。
-
-### 3.3 大企業より先にデファクトを取る
-
-本プロトコルはオープンプロトコルとSDKでロングテールのMCPサーバーから普及させ、デファクトスタンダードのポジションを取る設計。
-
-MCP自体がオープンプロトコルで、Linux Foundationに移管された。Anthropic、OpenAI、Google、Microsoftが全員MCPを採用しており、MCP層には単一の支配者がいない。各プラットフォーマーが独自に広告レイヤーを作る可能性は技術的に自明にある。GoogleがA2A+AP2に広告を足すのは容易い。
-
-**だからこそ先に動く。** ロングテールのMCPサーバーに広まっている状態を先に作ることで、大企業にとって「既に普及しているプロトコルに乗る」ほうが「独自規格を立ち上げて開発者を引き剥がす」より低コストな状態にする。ウェブ広告がプラットフォーム分断で苦しんでOpenRTBという共通プロトコルが生まれたのと同じ力学が、MCP層でも発生する。そのOpenRTBのポジションを取る。
-
-### 3.4 収益モデル
-
-**A：プロトコル手数料** — 報酬分配時にコントラクトが0.5-1%を取得。徴収先はProtocol Treasury（DAO管理）。Uniswapと同じモデルでプロトコルレベルで自動徴収。
-
-**B：Screener/Curatorのステーキング経済** — 参加者はSOLをステーク。品質に応じて配信枠の優先権が変動。市場原理でエコシステムが自律的に回る。
-
-**ツール・ダッシュボードはオープンソースで公開：**
-
-SDK、分析ダッシュボード、不正検知ロジック、レポーティングツールは全てオープンソースとする。プロトコルの存在理由が「広告費の完全な可視化」である以上、可視化ツールを有料にすることは設計哲学と矛盾する。オンチェーンデータは全公開であり、誰でも独自の分析ツールや不正検知サービスを構築できる。プロトコル公式は参照実装として提供するが、無料。サードパーティによるツール層の自律的成長を促進し、OpenRTBのポジションを取るための一貫性の証明とする。
-
-### 3.5 独自トークンについて
-
-**Phase 1-2では導入しない。SOL/USDCで全機能が動作する設計。規制リスクを最小化。**
-
-Protocol Treasuryはプロトコル手数料（0.5-1%）で自律的に蓄積。パラメータ変更権は運営マルチシグが保持。
-
-**導入条件（全て満たすこと）：**
-
-1. Solana mainnet稼働済み（Phase 2完了）
-2. 第三者Screenerが3以上稼働
-3. 第三者Curatorが30以上稼働
-4. 月間オンチェーン記録が10万件超
-5. Protocol Treasury残高が運営6ヶ月分以上
-
-上記5条件が揃った段階で、プロトコルパラメータの変更権を運営マルチシグから分散ガバナンスへ移行する実質的な必要性が生じる。条件未達でのトークン導入はプロトコル設計上の必要性がなく、資金調達目的のトークンセールとの混同を避ける。
-
-**導入時の用途：**
-
-**A. プロトコルパラメータのガバナンス投票**
-
-ガバナンストークンが解く問題は「プロトコルパラメータの変更権を誰が持つか」の政治問題である。SOLステーキングではなく独自トークンが必要な理由は、SOLステーカーはSolanaエコシステム全体の利害を代表するが、本プロトコル固有の利害（protocol_fee率、rate_limit閾値、slashing条件）とは一致しない場合があるため。プロトコル固有の利害を反映するには、プロトコル固有のステークが必要。
-
-対象パラメータ：protocol_fee、rate_limit閾値、slashing条件、L2移行パラメータ
-
-**B. Phase 3 L2ガストークン（検討）**
-
-プロトコル専用SVM Rollup移行時に、L2のガストークンとしてプロトコルトークンを使用する可能性がある。L2の経済設計（ガスコストの調整、シーケンサー報酬）をプロトコル側でコントロールするためには、SOLではなく独自トークンが合理的。ただしSOLをそのままL2ガストークンとして使用するオプションも排除しない。
-
-**C. Screener/Curatorのステーキング移行**
-
-Phase 1-2ではSOLステーク。トークン導入後はプロトコルトークンステークに移行。品質に応じた配信枠の優先権、slashing対象をプロトコルトークンに統一。
-
-**導入しない用途：**
-
-- Agent報酬（Sybil対策の複雑性により棄却済み）
-- 投機的価値の創出
+**独自トークンはPhase 1-2で導入しない。** SOL/USDCで全機能が動作する設計。
 
 -----
 
-## 4. 既存の技術資産
+## 4. 技術資産
 
-### 4.1 スタック一覧
+### 4.1 Phase 1 実装物
 
-|リポジトリ                 |行数     |役割                                                                  |本プロジェクトでの活用              |
-|----------------------|-------|--------------------------------------------------------------------|-------------------------|
-|iab-types             |-      |IAB Tech Lab仕様のTypeScript型定義（OpenRTB 2.5/2.6/3.0, AdCOM, Native Ads）|広告オブジェクト・コンテキストカテゴリの型定義基盤|
-|trawl                 |~3,200 |OpenRTB 3.0入札収集ライブラリ                                                |オークションロジックの流用（Curator内）  |
-|adelv                 |~3,700 |広告配信ライブラリ（AdCOM Ad受取→配信→計測）                                         |Impression proof生成パイプライン |
-|vide                  |~35,500|モジュラー動画プレイヤー（VAST 4.2/VMAP/SSAI/VPAID 2.0/SIMID/OMID/IMA Bridge）    |動画広告シナリオの参照実装            |
-|lynq                  |~13,600|MCPサーバーのセッション管理ライブラリ                                                |Curatorのセッション管理・ツール可視性制御 |
-|vaulx                 |~7,200 |エージェントウォレットMCPサーバー（EVM）                                             |Solana対応 + 署名キュー + 送信機能追加|
-|agent-payment-protocol|-      |エージェント間決済のオープンプロトコル仕様                                               |決済フローの設計パターン流用           |
+| パッケージ | 行数 | 役割 |
+|---|---|---|
+| programs/verifiable-ad-protocol | ~1,100 | Solana Program（Anchor/Rust）。12 instructions, 6 account types |
+| packages/core | ~300 | Protocol primitives（types, Borsh serialize, PDA helpers, IDL） |
+| packages/ad-mcp | ~800 | Agent側 Ad MCP server（process_ad, WalletProvider, retry queue） |
+| packages/curator-sdk | ~200 | Curator SDK（CuratorClient, ad() middleware, ScreenerProvider interface） |
+| packages/screener | ~300 | Local Screener（on-chain fetch, SQLite DB, signer） |
+| packages/cli | ~500 | Protocol CLI（advertiser, screener, curator, inspect） |
+| demo/ | ~600 | E2E demo + mock weather MCP + setup scripts |
 
-**合計：約63,200行の既存コード。**
+### 4.2 既存リポジトリ
 
-### 4.2 monorepoパッケージ一覧（Phase 1 PoC）
-
-| パッケージ | パス | 役割 |
-|-----------|------|------|
-| @verifiable-ad-protocol/core | packages/core/ | プロトコル基本型、IDL、PDAヘルパー、Ed25519 ix構築 |
-| @verifiable-ad-protocol/ad-mcp | packages/ad-mcp/ | Agent側広告MCPサーバー（WalletProvider連携、tx組立・送信） |
-| @verifiable-ad-protocol/curator-sdk | packages/curator-sdk/ | Curator SDK（AdSlot構築、Screener+Curator dual-sign） |
-| @verifiable-ad-protocol/screener | packages/screener/ | Screener（on-chain広告取得、SQLite DBキャッシュ、リアルタイム署名） |
-| @verifiable-ad-protocol/cli | packages/cli/ | Protocol CLI（advertiser/screener/curator操作、inspect） |
-| demo/e2e.ts | demo/ | E2Eデモスクリプト（localnet/devnet対応） |
-| demo/mock-mcp/ | demo/ | Mock Curator MCPサーバー（lynqベース、ad()ミドルウェアで広告注入） |
+| リポジトリ | 行数 | 本プロジェクトでの活用 |
+|---|---|---|
+| lynq | ~13,600 | MCPサーバーフレームワーク。ad() middlewareの基盤 |
+| vaulx | ~7,200 | エージェントウォレットMCP。sign_bytes + raw tx submit |
+| iab-types | - | IAB Tech Lab型定義。カテゴリ参照 |
+| trawl / adelv / vide | ~42,400 | OpenRTB/広告配信/動画の参考実装 |
 
 ### 4.3 実証済みの動作
 
-1. lynqで構築したMCPサーバーにagent-payment-protocolミドルウェアを挿入し、オンチェーン上での決済実行とエージェントによるレシート認識まで確認済み。HTTP層ではなくMCP層での決済が実際に動作することを実証。
-
-2. **MCP層での広告配信→オンチェーン記録のE2E実証完了（localnet）：**
-   - lynqベースのMock MCPサーバー（Curator役）に`ad()`ミドルウェアを適用
-   - ツール呼び出し（天気取得等）のレスポンスにsponsored contentとad_slotを自動注入
-   - Agent LLMが広告を自然に表示（言語・文脈に適応、Sponsored明記）
-   - Agent LLMが`process_ad`ツールを自動呼び出し → vaulx署名 → Solana記録
-   - 3者Ed25519署名検証 + 報酬自動分配がオンチェーンで完了
-   - 広告表示ルールはAgent側の`~/.claude/CLAUDE.md`で定義（MCP instructionsの代替、ツール結果内のpromptはプロンプトインジェクション扱いされるため）
+- E2E localnet完走: 3者署名検証 + 報酬分配の数値検証
+- Claude Code live demo: 実AIエージェントがmock MCPから広告受取→on-chain記録
+- 報酬検証: Screener 1,492 / Curator 8,458 / Protocol 50 / Submission 5,000 lamports
 
 -----
 
 ## 5. 競合分析
 
-|                 |決済       |広告配信   |Delivery検証 |広告費の完全追跡|エージェント対応|MCP層   |
-|-----------------|---------|-------|-----------|--------|--------|-------|
-|x402（Coinbase）   |✅ HTTP層  |❌      |❌          |❌       |✅       |❌      |
-|AP2（Google+x402） |✅ A2A層   |❌      |❌          |❌       |✅       |❌      |
-|BAT/Brave        |✅        |✅（限定的） |△（Brave内のみ）|❌       |❌       |❌      |
-|AdEx             |✅ OUTPACE|✅      |△（バリデーター依存）|❌       |❌       |❌      |
-|Google Ads/Prebid|✅ オフチェーン |✅      |❌（自己申告）    |❌       |❌       |❌      |
-|**本プロジェクト**      |✅ Solana |✅（実証済み）|✅（実証済み）    |✅（実証済み） |✅       |✅（実証済み）|
+### 5.1 ポジショニング
 
-**x402との関係：** x402は決済レール。本プロジェクトは広告検証プロトコル。レイヤーが異なり補完関係にある。x402/AP2がエージェントのウォレット普及を加速し、本プロトコルの前提（Agent署名）が自然に成立する。
+| | 決済 | 配信 | Delivery検証 | 費用追跡 | Agent対応 | MCP層 |
+|---|---|---|---|---|---|---|
+| x402（Coinbase） | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| AP2（Google+x402）| ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| BAT/Brave | ✅ | △ | △ | ❌ | ❌ | ❌ |
+| AdEx | ✅ | ✅ | △ | ❌ | ❌ | ❌ |
+| Google Ads/Prebid | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **本プロジェクト** | ✅ | ✅ | **✅** | **✅** | **✅** | **✅** |
 
-**BAT/Brave：** ブラウザ内ローカルマッチング + ZKP。Braveにロックイン。既存SSP/DSPとの互換性ゼロ。広告フォーマットが限定的。
+### 5.2 技術比較
 
-**AdEx：** Ethereum上のOUTPACE + AdView。インプレッション検証はバリデーター合意に依存（オフチェーン）。結託で不正が可能。
+**BAT Attention Proof vs 本プロトコル:**
 
-**Adshares：** 独自ブロックチェーン + AdSelect。分散型を謳いながらコアロジックが中央集権的。独自チェーンへの依存。
+BATはBraveブラウザ内でattention（タブフォーカス、スクロール位置）をローカル計測し、ブラウザが集計結果を自己申告する。trust anchorはBrave 1者。Brave以外では動作しない（クライアントロックイン）。viewability寄りのモデル。
+
+本プロトコルは3者の独立した秘密鍵によるEd25519署名でdeliveryを証明する。trust anchorは独立3者。任意のMCPクライアントで動作し、クライアント非依存。per-impressionでon-chain検証。
+
+**AdEx OUTPACE vs 本プロトコル:**
+
+OUTPACE（Off-chain Unidirectional Trustless Payment Channel）はバリデーターネットワークがimpressionをoff-chainで集計し、定期的にon-chainにcommitmentを提出する。バリデーターの過半数がhonestであるBFT仮定に依存。impression単位のon-chain検証はなく、バッチ集計のみ。
+
+本プロトコルはimpression単位でon-chain検証（Ed25519 ×3 per tx）。検証の粒度が根本的に異なる。OUTPACEはthroughput優先（バッチ）、本プロトコルはverification優先（per-impression）。throughputはPhase 3のL2移行で解決する。
+
+**要約:**
+
+```
+                BAT              AdEx OUTPACE        本プロトコル
+検証モデル      ブラウザ自己申告   バリデーターBFT     3者独立署名
+検証粒度        セッション集計     バッチcommitment    per-impression on-chain
+Trust anchor    Brave 1者         バリデーター群       独立3者（Screener/Curator/Agent）
+クライアント    Brave限定          汎用                MCP任意
+スコープ        viewability寄り   delivery（集計）     delivery（per-impression）
+```
 
 -----
 
 ## 6. ロードマップ
 
-### Phase 1：PoC（Solana devnet）
+### Phase 1：PoC（Solana localnet）— 完了
 
-**Step 1：Solanaプログラム（Ad Registry + 署名検証 + 報酬分配）**
+12 instructions, 6 account types, Ed25519 3者署名検証, 報酬分配, Bitmap重複防止, rate limit, hourly cap, submission fee。packages: core, ad-mcp, curator-sdk, screener, cli。E2E localnet完走。Claude Code live demo確認。
 
-- Anchorフレームワークで最小のAd Registryを実装
-- 広告登録（advertiser, budget, authorized_screeners, excluded_curators, max_cpm, max_screener_share）
-- Screener Registry（declared_share、endorsed_curators、staked_amount、slashable）
-- 3署名検証（Ed25519 Program経由）、1tx = 1署名セット
-- 重複防止：広告主単位Bitmapアカウントによるフラグ管理
-- fee payer = permissionless（submission_fee でdepositから即時補填）
-- 報酬分配ロジック（declared_shareに基づく自動分配）
-- update_config instruction（authority がprotocol_fee_bps, treasuryを動的に変更可能）
-- submission_fee = SUBMISSION_FEE_LAMPORTS（プログラム定数、update_config対象外）
-- レートリミット（Curator単位 + 広告主budget単位のガス消費上限）
-- スラッシュ関数のスロット（Phase 1では authority only、slashable: false固定）
-- devnetでデプロイ・テスト
+**Phase 1で棄却:** AgentRegistry、Dynamic submission fee、Protocol gas pool、Elicitation hook、Agent側NonceManager。
 
-**Step 2：3者署名検証フローの実証**
+### Phase 2：初期運用（devnet → mainnet）
 
-- Screener署名 + Curator署名 + Agent署名を生成（全てオフチェーン）
-- Agentが1txでオンチェーン記録
-- submission_feeがdepositからpayerに補填されることを確認
-- declared_shareに基づく報酬分配が正しく実行されることを確認
+Authority multisig化、Config timelock、Screener ephemeral key relay、外部Screener参入、Agent-native Ad Spec策定、npm公開、CPMクロスプロモーション開始。
 
-**Step 2.5：Off-chain TypeScript packages**
+### Phase 3：スケール（SVM Rollup）
 
-- `packages/core/` — protocol primitives（AdSlot型、canonical message構築、Ed25519 ix組立、PDA helpers）
-- `packages/ad-mcp/` — Agent側の広告専用MCPサーバー（lynqベース）
-  - vaulx HTTP client（localhost直接通信、LLM経由しない）
-  - process_ad tool（署名 + tx組立 + submit の全自動処理）
-  - SQLite nonce管理 + リトライキュー
-  - CLI init（vaulx auto-detect）
-- Borsh serialization の Rust/TS 一致を test vector で検証済み
-
-**Step 3：vaulx Solana対応 + Ad MCP連携**
-
-- 既存EVMサイナーと並列にSolanaサイナーを追加
-- Ad MCP → vaulx HTTP API（/api/sign-bytes, /api/sign-and-send-raw-transaction）
-- 即時送信 + 失敗時ローカルDB保存 + 自動リトライ
-- Fee payer対応
-
-**Step 4：Commercial Slotフォーマット定義**
-
-- MCPツールレスポンス内の商業情報フォーマットをAdCOM（iab-types）ベースで設計
-- context_categoryフィールド（IAB Content Taxonomy準拠）
-- organic情報とsponsored情報の明示的区別
-
-**Step 5：MCPサーバー参照実装（Curator役）**
-
-- lynqベースのMCPサーバー
-- ScreenerのDBから広告取得 → レスポンスにcommercial slotを含める
-- 署名①②＋広告データをAgentに渡す仕組み
-
-**Step 6：エンドツーエンドデモ**
-
-- 広告主がdevnetに広告登録（excluded_curators、max_screener_share含む）
-- Screenerがフィルタ + declared_share宣言 + 署名
-- CuratorがMCPツール経由で配信 + 署名
-- Agentが受信 + 署名 + vaulxで即時送信
-- 3署名がSolanaで検証 → declared_shareに基づく報酬自動分配
-- **このフローが1本通れば概念検証完了**
-
-### Phase 2：初期運用（Solana mainnet）
-
-- Solana mainnet移行
-- CPM型クロスプロモーションの開始（indie MCPサーバー同士の相互推薦）
-- npm installで導入可能なCurator SDK公開
-- Protocol-operated Screener（運営がデフォルトScreenerを兼務）の稼働
-- 中小MCPサーバーへの展開
-- 外部直接広告主の獲得開始
-- 第三者Screener参入条件の定義と受入開始
-- **Screener ephemeral key relay：** Screenerが一時鍵（ephemeral keypair）を生成し少額SOLを入金。Curator/Agentに鍵またはrelay endpointを提供し、fee payerとして使用する。submission_feeがdepositから即時補填されるため立替リスクはゼロ（atomic）。これによりAgentはSOL保有不要で参加可能になり、ウォレットにSOLを持たないユーザーでもプロトコルに参加できる。Phase 1ではAgentがfee payerを兼務しているが、本番運用ではScreenerがrelay infrastructureを提供するのが現実的
-
-### Phase 3：スケール（プロトコル専用SVM Rollup）
-
-**Step 1：L2移行判断**
-
-以下の条件のいずれかを満たした段階でL2移行を開始する。
-
-- 日次オンチェーン記録が10万件を超過
-- Solana L1のプライオリティフィー高騰により、広告txのランディング失敗率が5%を超過
-- $2 CPM帯でのガス比率を1%以下に圧縮する必要性が市場から求められた段階
-
-**Step 2：プロトコル専用SVM Rollup構築**
-
-L2の選択理由：本プロトコルの設計哲学「検証可能性のオンチェーン担保」を維持するため。State Compression（Concurrent Merkle Tree）はオフチェーンIndexerへの依存を再導入し、プロトコルの存在理由と矛盾する（2.3参照）。L2ではデータ本体がL2チェーンのstate storageに完全に保持され、検証可能性がL2レベルで自己完結する。
-
-```
-L2（プロトコル専用SVM Rollup）:
-  ├── 署名セット記録（全データ保持、Indexer不要）
-  ├── Ed25519 × 3 署名検証
-  ├── 報酬分配（即時、L2内で完結）
-  ├── 重複防止PDA（L2内のrentはプロトコル経済設計で最適化）
-  └── 専用ブロックスペース（DeFi/NFTとの競合なし）
-
-Solana L1:
-  ├── state rootアンカリング（定期的、L2データの改竄不可能性を担保）
-  ├── 広告主budgetデポジット（L1 → L2ブリッジ経由）
-  └── Screener/Curatorステーク（将来）
-```
-
-L2でのtxコスト目標：L1の1/10〜1/100（$0.00002〜0.000002/impression）。$2 CPM帯でガス比率0.1〜1%。
-
-Anchorで書いたSolanaプログラムはSVM互換のため書き直し不要。
-
-**Step 3：L2インフラ選定**
-
-- 既存SVM Rollupインフラ（Sonic等）への相乗り、または自前シーケンサー運営の判定
-- 自前シーケンサーの場合：運営コスト月$500〜2,000（クラウドサーバー）。初期は中央集権シーケンサーを許容
-- L1⇔L2ブリッジ：広告主budgetデポジットの移動のみ。攻撃面は限定的だが、ブリッジセキュリティの監査は必須
-- 複数広告主バッチのfee payer按分ロジック設計
-
-**Step 4：分散シーケンサーへの移行**
-
-- ガバナンストークン導入（3.5の導入条件と同期）と合わせて実施
-- シーケンサー運営をDAO参加者に分散
-- スラッシュのDAO化（自動トリガー条件の定義と分散型ガバナンスへの移行）
+L2移行（日次10万件超で判断）、ガバナンストークン導入、DAO化。
 
 -----
 
-## 7. 技術的未解決事項
+## 7. 未解決事項
 
-### 7.1 Screener DBの構造
+**各項目にtrigger（着手条件）を明示。triggerを満たすまでは着手しない。**
 
-- オフチェーンDB（PostgreSQL等）のスキーマ設計
-- オンチェーンのAd Registryとの同期方法
-- コンテキストカテゴリとマッチングルールの標準化
+### Phase 2 Must（mainnet前に必須）
 
-### 7.2 AI提供者アテステーション（将来）
+| ID | 項目 | Trigger |
+|---|---|---|
+| P2-2 | Authority → Multisig | mainnet deploy前 |
+| P2-4 | Config変更のtimelock | mainnet deploy前 |
+| P2-11 | Screener relay endpoint（burl pattern） | 外部Agent（SOLなし）参加時 |
 
-- Anthropic/OpenAI等が「正規エージェント」を証明するプロトコル
-- 署名スキーム、証明書チェーンの設計
-- プライバシーとのバランス
+### Phase 2 Should
 
-### 7.3 Bitmap重複防止の設計詳細
+| ID | 項目 | Trigger |
+|---|---|---|
+| P2-1 | Agent-native Ad Spec | 外部advertiser 1社目の契約時 |
+| P2-5 | vaulx elicitation security | vaulxがmainnet SOLを扱う時 |
+| P2-10 | Data consent / opt-in | EU圏agentが参加する時 |
+| P2-12 | Screener API latency/availability要件 | Screener別プロセス分離時 |
 
-- 広告主単位Bitmapのサイズ設計（初期容量、拡張方式）
-- impression IDからBitmap内のbit位置へのマッピング関数
-- Bitmap飽和時の新規Bitmap作成とローテーション方式
+**P2-12 要件定義:**
 
-### 7.4 L2移行の技術的課題
+```
+POST /ads/query:  p99 < 200ms, availability 99.5%, rate limit 1,000 req/s per Curator
+POST /ads/sign:   p99 < 100ms, availability 99.5%, idempotent
+Failure mode:     Screener down → Curatorは広告なしで返す（graceful degradation）
+                  Screener slow → 200ms timeout → 広告なしで返す
+                  Service MCP自体の可用性に影響しない設計が必須
+```
 
-- SVM Rollupのシーケンサー選定基準（既存インフラ vs 自前構築のコスト比較）
-- L1⇔L2ブリッジの設計（広告主budgetデポジットの移動、セキュリティ監査要件）
-- L1アンカリング頻度の最適化（コスト vs 検証遅延のトレードオフ）
-- L2障害時のフォールバック設計（L1への一時的フォールバック or L2冗長化）
-- Phase 1-2のL1データからL2への移行パス（既存記録の扱い）
+### Phase 2 Nice-to-have
 
-### 7.5 Ad MCP ↔ vaulx 間の auth token 管理
+| ID | 項目 | Trigger |
+|---|---|---|
+| P2-3 | Submission fee動的化 | L2移行設計と同時。base fee大幅変動時 |
+| P2-6 | AI提供者アテステーション | Sybil月間損失 > 対策コスト時 |
+| P2-7 | DAO / Token | v4記載の5条件全達成時 |
+| P2-8 | L2（SVM Rollup） | 日次impression > 100K or fee比率 > 20% |
+| P2-9 | Agent事前登録の再検討 | P2-6と連動。単独復活なし |
+| P2-13 | Bitmap close instruction | bitmap rent total > $100/advertiser時 |
 
-- Phase 1 は file-based（~/.vaulx/wallets/{active}/.env から WALLET_AUTH_TOKEN を読み取り）
-- Phase 2 以降で OS keychain 統合を検討（macOS Keychain、Linux Secret Service、Windows Credential Manager）
-- Ad MCP の CLI init が vaulx auto-detect で token を自動取得
+### 技術的未解決事項
 
-### 7.6 Nonce管理の設計
+**7.1 Screener ↔ Curator Protocol（wire protocol）**
 
-nonceはcanonical messageに含まれ、Screener/Curator署名時に確定する必要がある。現在のPhase 1ではCuratorClient.createAdSlot()呼び出し時に外部から渡す設計だが、以下の課題がある：
+DB schemaはimplementation detail。定義すべきはwire formatのみ:
 
-- **ステートレス環境での一意性保証：** Curatorがステートレス（サーバーレス等）で動作する場合、インクリメンタルなnonceカウンタの永続化が困難。デモではランダムnonce（chunk 0内、0-8191）で回避しているが、本番では衝突確率が無視できない
-- **Bitmap chunk制約：** nonceはbitmap内のbit位置（`nonce % 8192`）とchunk index（`nonce / 8192`）に変換される。chunk indexはu16範囲内である必要があり、大きなnonce値は使えない。chunkは事前に`initializeBitmap`で作成が必要
-- **nonce管理の責務：** Curator（署名者）が管理すべきだが、Curatorがステートレスの場合は外部nonce serviceやScreenerDB連携が必要になる可能性がある
-- **Phase 2以降の解決策候補：** Screener APIがnonce発行機能を提供する、またはad_id+agent+timestampのハッシュからdeterministicにnonce生成する方式
+```
+POST /ads/query
+  Request: { context_categories, curator_pubkey, agent_pubkey, max_results }
+  Response: { ads: [{ ad_id, advertiser, max_cpm_lamports, content, context_categories }] }
 
-### 7.7 ガバナンストークンの設計詳細
+POST /ads/sign
+  Request: { ad_id, curator_pubkey, agent_pubkey, impression_nonce, context_hash, timestamp }
+  Response: { screener_signature, screener_pubkey }
+```
 
-- トークン配分設計（Treasury, Screener/Curator報酬, 開発者, 初期参加者）
-- ガバナンス投票の仕組み（投票期間、クォーラム、提案条件）
-- L2ガストークンとして使用する場合の経済モデル（インフレ率、バーンメカニズム）
-- SOLステークからプロトコルトークンステークへの移行手順
+curator-sdkはScreenerProvider interfaceで抽象化:
+- Phase 1: LocalScreenerProvider（同一プロセス、DB直接）
+- Phase 2: HttpScreenerProvider（HTTP API、Screener別プロセス）
+
+**7.2 Nonce管理**
+Phase 1: ランダムnonce（chunk 0内、衝突確率許容）。Phase 2候補: Screener APIのnonce発行機能、またはad_id+agent+timestampからdeterministic生成。
+
+**7.3 L2移行** — SVM Rollupシーケンサー選定、ブリッジ設計。AnchorコードはSVM互換で書き直し不要。
+
+**7.4 Auth token管理** — Phase 1: file-based。Phase 2: OS keychain統合。
 
 -----
 
 ## 8. 参考資料
 
 ### プロトコル・仕様
-
 - OpenRTB 3.0 / AdCOM 1.0 — IAB Tech Lab
-- MCP (Model Context Protocol) — Anthropic → Linux Foundation AAIF
-- x402 — Coinbase (HTTP層決済プロトコル)
-- AP2 (Agentic Payments Protocol) — Google + x402
-- A2A (Agent-to-Agent Protocol) — Google → Linux Foundation AAIF
+- MCP — Anthropic → Linux Foundation AAIF
+- x402 — Coinbase、AP2 — Google + x402、A2A — Google → AAIF
 
-### Solana技術参照
-
-- Solana State Compression — Solana Documentation（検討・棄却の経緯は2.3に記載）
-- Concurrent Merkle Tree — Solana Program Library
-- SVM Rollup — Sonic SVM, Eclipse
+### Solana
+- Ed25519 Program、SVM Rollup（Sonic, Eclipse）
 
 ### 分散型広告
-
 - BAT Whitepaper — Brave Software (2021)
-- AdEx Protocol — GitHub AmbireTech/adex-protocol
-- Adshares — adshares.net/protocol
+- AdEx OUTPACE — Off-chain Unidirectional Trustless Payment Channel
 
 ### 自己リポジトリ
-
-- https://github.com/hogekai/iab-types
-- https://github.com/hogekai/vide
-- https://github.com/hogekai/lynq
-- https://github.com/hogekai/adelv
-- https://github.com/hogekai/trawl
+- https://github.com/hogekai/verifiable-ad-protocol
 - https://github.com/hogekai/vaulx
-- https://github.com/agentprotocols/agent-payment-protocol
+- https://github.com/hogekai/lynq
+- https://github.com/hogekai/iab-types
