@@ -24,7 +24,6 @@ pub mod verifiable_ad_protocol {
         ctx: Context<InitializeConfig>,
         protocol_fee_bps: u16,
         treasury: Pubkey,
-        min_agent_age_seconds: i64,
     ) -> Result<()> {
         require!(protocol_fee_bps <= 10000, ProtocolError::InvalidShareBps);
 
@@ -32,7 +31,6 @@ pub mod verifiable_ad_protocol {
         config.authority = ctx.accounts.authority.key();
         config.protocol_fee_bps = protocol_fee_bps;
         config.treasury = treasury;
-        config.min_agent_age_seconds = min_agent_age_seconds;
         config.bump = ctx.bumps.protocol_config;
         Ok(())
     }
@@ -141,15 +139,6 @@ pub mod verifiable_ad_protocol {
         Ok(())
     }
 
-    pub fn register_agent(ctx: Context<RegisterAgent>) -> Result<()> {
-        let agent_registry = &mut ctx.accounts.agent_registry;
-        agent_registry.agent = ctx.accounts.agent.key();
-        agent_registry.registered_at = Clock::get()?.unix_timestamp;
-        agent_registry.total_impressions = 0;
-        agent_registry.bump = ctx.bumps.agent_registry;
-        Ok(())
-    }
-
     pub fn update_ad(
         ctx: Context<UpdateAd>,
         max_cpm_lamports: u64,
@@ -231,11 +220,11 @@ pub mod verifiable_ad_protocol {
         context_hash: [u8; 32],
         timestamp: i64,
         chunk_index: u16,
+        agent_pubkey: Pubkey,
     ) -> Result<()> {
         let ad = &ctx.accounts.ad_account;
         let screener = &ctx.accounts.screener_account;
         let curator_acc = &ctx.accounts.curator_account;
-        let agent_reg = &ctx.accounts.agent_registry;
 
         // ── 0. Basic checks ──────────────────────────────────────────
         require!(ad.is_active, ProtocolError::AdNotActive);
@@ -264,7 +253,7 @@ pub mod verifiable_ad_protocol {
             ProtocolError::ExcludedCurator
         );
         require!(
-            agent_reg.agent != screener.screener && agent_reg.agent != curator_acc.curator,
+            agent_pubkey != screener.screener && agent_pubkey != curator_acc.curator,
             ProtocolError::AgentIsScreenerOrCurator
         );
         require!(
@@ -277,7 +266,7 @@ pub mod verifiable_ad_protocol {
             ad_id: ctx.accounts.ad_account.key(),
             screener: screener.screener,
             curator: curator_acc.curator,
-            agent: agent_reg.agent,
+            agent: agent_pubkey,
             impression_nonce,
             context_hash,
             timestamp,
@@ -294,7 +283,7 @@ pub mod verifiable_ad_protocol {
 
         verify_ed25519_instruction(instructions_sysvar, 0, &screener.screener, message_hash.as_ref())?;
         verify_ed25519_instruction(instructions_sysvar, 1, &curator_acc.curator, message_hash.as_ref())?;
-        verify_ed25519_instruction(instructions_sysvar, 2, &agent_reg.agent, message_hash.as_ref())?;
+        verify_ed25519_instruction(instructions_sysvar, 2, &agent_pubkey, message_hash.as_ref())?;
 
         // ── 3. Bitmap deduplication ──────────────────────────────────
         let expected_chunk = get_chunk_index(impression_nonce);
@@ -343,13 +332,17 @@ pub mod verifiable_ad_protocol {
             .ok_or(ProtocolError::ArithmeticOverflow)?;
         require!(new_spent <= ad.budget_lamports, ProtocolError::InsufficientBudget);
 
+        // Deposit must cover both rewards AND submission fee
+        let total_deduction = per_impression
+            .checked_add(SUBMISSION_FEE_LAMPORTS)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
         let deposit_lamports = ctx.accounts.deposit_account.to_account_info().lamports();
         let rent = Rent::get()?;
         let deposit_rent_exempt = rent.minimum_balance(DEPOSIT_ACCOUNT_SPACE);
         let available = deposit_lamports
             .checked_sub(deposit_rent_exempt)
             .ok_or(ProtocolError::InsufficientDeposit)?;
-        require!(available >= per_impression, ProtocolError::InsufficientDeposit);
+        require!(available >= total_deduction, ProtocolError::InsufficientDeposit);
 
         // ── 6. SOL transfers (lamports direct manipulation) ──────────
         if screener_reward > 0 {
@@ -373,6 +366,12 @@ pub mod verifiable_ad_protocol {
                 .to_account_info()
                 .try_borrow_mut_lamports()? += protocol_fee;
         }
+
+        // ── 6b. Submission fee to payer ───────────────────────────────
+        **ctx.accounts.deposit_account.to_account_info().try_borrow_mut_lamports()? -=
+            SUBMISSION_FEE_LAMPORTS;
+        **ctx.accounts.payer.to_account_info().try_borrow_mut_lamports()? +=
+            SUBMISSION_FEE_LAMPORTS;
 
         // ── 7. State updates ─────────────────────────────────────────
         let ad = &mut ctx.accounts.ad_account;
@@ -487,23 +486,6 @@ pub struct RegisterCurator<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RegisterAgent<'info> {
-    #[account(mut)]
-    pub agent: Signer<'info>,
-
-    #[account(
-        init,
-        payer = agent,
-        space = AGENT_REGISTRY_SPACE,
-        seeds = [b"agent", agent.key().as_ref()],
-        bump
-    )]
-    pub agent_registry: Account<'info, AgentRegistry>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
 pub struct UpdateAd<'info> {
     pub advertiser: Signer<'info>,
 
@@ -543,7 +525,7 @@ pub struct UpdateCurator<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(_impression_nonce: u64, _context_hash: [u8; 32], _timestamp: i64, chunk_index: u16)]
+#[instruction(_impression_nonce: u64, _context_hash: [u8; 32], _timestamp: i64, chunk_index: u16, _agent_pubkey: Pubkey)]
 pub struct RecordImpression<'info> {
     #[account(
         mut,
@@ -565,12 +547,6 @@ pub struct RecordImpression<'info> {
         bump = curator_account.bump
     )]
     pub curator_account: Box<Account<'info, CuratorAccount>>,
-
-    #[account(
-        seeds = [b"agent", agent_registry.agent.as_ref()],
-        bump = agent_registry.bump
-    )]
-    pub agent_registry: Box<Account<'info, AgentRegistry>>,
 
     #[account(
         mut,
@@ -610,6 +586,12 @@ pub struct RecordImpression<'info> {
     /// CHECK: Instructions sysvar for Ed25519 signature verification.
     #[account(address = instructions_sysvar_mod::ID)]
     pub instructions_sysvar: UncheckedAccount<'info>,
+
+    /// Payer who submits the tx. Receives submission_fee from deposit.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

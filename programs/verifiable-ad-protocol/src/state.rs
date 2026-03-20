@@ -9,12 +9,11 @@ pub struct ProtocolConfig {
     pub authority: Pubkey,
     pub protocol_fee_bps: u16,
     pub treasury: Pubkey,
-    pub min_agent_age_seconds: i64,
     pub bump: u8,
 }
 
-// space = 8 + 32 + 2 + 32 + 8 + 1 = 83
-pub const PROTOCOL_CONFIG_SPACE: usize = 83;
+// space = 8 + 32 + 2 + 32 + 1 = 75
+pub const PROTOCOL_CONFIG_SPACE: usize = 75;
 
 /// Advertiser deposit pool. SOL balance is tracked via account lamports.
 /// PDA seeds: ["deposit", advertiser.key()]
@@ -81,20 +80,6 @@ pub struct CuratorAccount {
 // space = 8 + 32 + (4 + 200) + 8 + 8 + 1 = 261
 // + 20 (sub-phase 3 fields) + 50 (buffer) = 331
 pub const CURATOR_ACCOUNT_SPACE: usize = 331;
-
-/// Agent (ad recipient) registry entry.
-/// PDA seeds: ["agent", agent.key()]
-#[account]
-pub struct AgentRegistry {
-    pub agent: Pubkey,
-    pub registered_at: i64,
-    pub total_impressions: u64,
-    pub bump: u8,
-}
-
-// space = 8 + 32 + 8 + 8 + 1 = 57
-// + 50 (buffer) = 107
-pub const AGENT_REGISTRY_SPACE: usize = 107;
 
 /// Bitmap for impression deduplication per ad.
 /// PDA seeds: ["bitmap", ad_account.key(), chunk_index.to_le_bytes()]

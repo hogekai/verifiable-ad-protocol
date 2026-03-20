@@ -61,12 +61,6 @@ describe("verifiable-ad-protocol", () => {
       program.programId
     );
 
-  const findAgentPda = (agentKey: PublicKey) =>
-    PublicKey.findProgramAddressSync(
-      [Buffer.from("agent"), agentKey.toBuffer()],
-      program.programId
-    );
-
   async function airdrop(key: PublicKey, amount = 10 * LAMPORTS_PER_SOL) {
     const sig = await provider.connection.requestAirdrop(key, amount);
     await provider.connection.confirmTransaction(sig, "confirmed");
@@ -90,7 +84,7 @@ describe("verifiable-ad-protocol", () => {
       const [configPda] = findConfigPda();
 
       await program.methods
-        .initializeConfig(50, treasury.publicKey, new BN(3600))
+        .initializeConfig(50, treasury.publicKey)
         .accounts({
           authority: authority.publicKey,
           protocolConfig: configPda,
@@ -107,7 +101,6 @@ describe("verifiable-ad-protocol", () => {
       expect(config.treasury.toString()).to.equal(
         treasury.publicKey.toString()
       );
-      expect(config.minAgentAgeSeconds.toNumber()).to.equal(3600);
     });
 
     it("fails when called a second time (PDA already exists)", async () => {
@@ -115,7 +108,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .initializeConfig(50, treasury.publicKey, new BN(3600))
+          .initializeConfig(50, treasury.publicKey)
           .accounts({
             authority: authority.publicKey,
             protocolConfig: configPda,
@@ -135,7 +128,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .initializeConfig(10001, treasury.publicKey, new BN(3600))
+          .initializeConfig(10001, treasury.publicKey)
           .accounts({
             authority: newAuthority.publicKey,
             protocolConfig: findConfigPda()[0],
@@ -456,33 +449,7 @@ describe("verifiable-ad-protocol", () => {
     });
   });
 
-  // ─── 6. register_agent ────────────────────────────────────────────────────
-
-  describe("register_agent", () => {
-    it("registers an agent successfully", async () => {
-      const [agentPda] = findAgentPda(agent.publicKey);
-
-      await program.methods
-        .registerAgent()
-        .accounts({
-          agent: agent.publicKey,
-          agentRegistry: agentPda,
-          systemProgram: anchor.web3.SystemProgram.programId,
-        })
-        .signers([agent])
-        .rpc();
-
-      const agentRegistry =
-        await program.account.agentRegistry.fetch(agentPda);
-      expect(agentRegistry.agent.toString()).to.equal(
-        agent.publicKey.toString()
-      );
-      expect(agentRegistry.registeredAt.toNumber()).to.be.greaterThan(0);
-      expect(agentRegistry.totalImpressions.toNumber()).to.equal(0);
-    });
-  });
-
-  // ─── 7. update_ad ─────────────────────────────────────────────────────────
+  // ─── 6. update_ad ─────────────────────────────────────────────────────────
 
   describe("update_ad", () => {
     it("updates ad fields successfully", async () => {
@@ -710,7 +677,7 @@ describe("verifiable-ad-protocol", () => {
       const [adPda] = findAdPda(advertiser.publicKey, 0);
       const [screenerPda] = findScreenerPda(screener.publicKey);
       const [curatorPda] = findCuratorPda(curator.publicKey);
-      const [agentPda] = findAgentPda(agent.publicKey);
+
       const [bitmapPda] = findBitmapPda(adPda, 0);
       const [depositPda] = findDepositPda(advertiser.publicKey);
       const [configPda] = findConfigPda();
@@ -736,12 +703,11 @@ describe("verifiable-ad-protocol", () => {
       const ix2 = createEd25519Ix(agent.secretKey, message);
 
       const ix3 = await program.methods
-        .recordImpression(nonce, Array.from(contextHash), timestamp, chunkIndex)
+        .recordImpression(nonce, Array.from(contextHash), timestamp, chunkIndex, agent.publicKey)
         .accounts({
           adAccount: adPda,
           screenerAccount: screenerPda,
           curatorAccount: curatorPda,
-          agentRegistry: agentPda,
           impressionBitmap: bitmapPda,
           depositAccount: depositPda,
           protocolConfig: configPda,
@@ -749,6 +715,8 @@ describe("verifiable-ad-protocol", () => {
           curatorWallet: curator.publicKey,
           protocolTreasury: treasury.publicKey,
           instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          payer: (provider.wallet as any).payer.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
         })
         .instruction();
 
@@ -765,6 +733,7 @@ describe("verifiable-ad-protocol", () => {
       const protocolFee = 50;
       const screenerReward = 1_492;
       const curatorReward = 8_458;
+      const submissionFee = 5_000;
 
       const screenerBalAfter = await provider.connection.getBalance(screener.publicKey);
       const curatorBalAfter = await provider.connection.getBalance(curator.publicKey);
@@ -774,7 +743,7 @@ describe("verifiable-ad-protocol", () => {
       expect(screenerBalAfter - screenerBalBefore).to.equal(screenerReward);
       expect(curatorBalAfter - curatorBalBefore).to.equal(curatorReward);
       expect(treasuryBalAfter - treasuryBalBefore).to.equal(protocolFee);
-      expect(depositBalBefore - depositBalAfter).to.equal(perImpression);
+      expect(depositBalBefore - depositBalAfter).to.equal(perImpression + submissionFee);
 
       // Verify state updates
       const ad = await program.account.adAccount.fetch(adPda);
@@ -792,7 +761,7 @@ describe("verifiable-ad-protocol", () => {
       const [adPda] = findAdPda(advertiser.publicKey, 0);
       const [screenerPda] = findScreenerPda(screener.publicKey);
       const [curatorPda] = findCuratorPda(curator.publicKey);
-      const [agentPda] = findAgentPda(agent.publicKey);
+
       const [bitmapPda] = findBitmapPda(adPda, 0);
       const [depositPda] = findDepositPda(advertiser.publicKey);
       const [configPda] = findConfigPda();
@@ -811,12 +780,12 @@ describe("verifiable-ad-protocol", () => {
         createEd25519Ix(curator.secretKey, message),
         createEd25519Ix(agent.secretKey, message),
         await program.methods
-          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0, agent.publicKey)
           .accounts({
             adAccount: adPda,
             screenerAccount: screenerPda,
             curatorAccount: curatorPda,
-            agentRegistry: agentPda,
+
             impressionBitmap: bitmapPda,
             depositAccount: depositPda,
             protocolConfig: configPda,
@@ -840,7 +809,7 @@ describe("verifiable-ad-protocol", () => {
       const [adPda] = findAdPda(advertiser.publicKey, 0);
       const [screenerPda] = findScreenerPda(screener.publicKey);
       const [curatorPda] = findCuratorPda(curator.publicKey);
-      const [agentPda] = findAgentPda(agent.publicKey);
+
       const [bitmapPda] = findBitmapPda(adPda, 1);
       const [depositPda] = findDepositPda(advertiser.publicKey);
       const [configPda] = findConfigPda();
@@ -859,12 +828,12 @@ describe("verifiable-ad-protocol", () => {
         createEd25519Ix(curator.secretKey, message),
         createEd25519Ix(agent.secretKey, message),
         await program.methods
-          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0, agent.publicKey)
           .accounts({
             adAccount: adPda,
             screenerAccount: screenerPda,
             curatorAccount: curatorPda,
-            agentRegistry: agentPda,
+
             impressionBitmap: bitmapPda,
             depositAccount: depositPda,
             protocolConfig: configPda,
@@ -880,7 +849,7 @@ describe("verifiable-ad-protocol", () => {
 
       const ad = await program.account.adAccount.fetch(adPda);
       expect(ad.totalImpressions.toNumber()).to.equal(2);
-      expect(ad.spentLamports.toNumber()).to.equal(20_000);
+      expect(ad.spentLamports.toNumber()).to.equal(20_000); // 2 * per_impression (submission_fee not tracked in spent)
     });
 
     it("fails with unauthorized screener", async () => {
@@ -901,7 +870,7 @@ describe("verifiable-ad-protocol", () => {
 
       const [adPda] = findAdPda(advertiser.publicKey, 0);
       const [curatorPda] = findCuratorPda(curator.publicKey);
-      const [agentPda] = findAgentPda(agent.publicKey);
+
       const [bitmapPda] = findBitmapPda(adPda, 2);
       const [depositPda] = findDepositPda(advertiser.publicKey);
       const [configPda] = findConfigPda();
@@ -920,12 +889,12 @@ describe("verifiable-ad-protocol", () => {
         createEd25519Ix(curator.secretKey, message),
         createEd25519Ix(agent.secretKey, message),
         await program.methods
-          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0, agent.publicKey)
           .accounts({
             adAccount: adPda,
             screenerAccount: fakeScreenerPda,
             curatorAccount: curatorPda,
-            agentRegistry: agentPda,
+
             impressionBitmap: bitmapPda,
             depositAccount: depositPda,
             protocolConfig: configPda,
@@ -957,7 +926,7 @@ describe("verifiable-ad-protocol", () => {
 
       const [screenerPda] = findScreenerPda(screener.publicKey);
       const [curatorPda] = findCuratorPda(curator.publicKey);
-      const [agentPda] = findAgentPda(agent.publicKey);
+
       const [bitmapPda] = findBitmapPda(adPda, 3);
       const [depositPda] = findDepositPda(advertiser.publicKey);
       const [configPda] = findConfigPda();
@@ -976,12 +945,12 @@ describe("verifiable-ad-protocol", () => {
         createEd25519Ix(curator.secretKey, message),
         createEd25519Ix(agent.secretKey, message),
         await program.methods
-          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0, agent.publicKey)
           .accounts({
             adAccount: adPda,
             screenerAccount: screenerPda,
             curatorAccount: curatorPda,
-            agentRegistry: agentPda,
+
             impressionBitmap: bitmapPda,
             depositAccount: depositPda,
             protocolConfig: configPda,
@@ -1020,7 +989,7 @@ describe("verifiable-ad-protocol", () => {
 
       const [screenerPda] = findScreenerPda(screener.publicKey);
       const [curatorPda] = findCuratorPda(curator.publicKey);
-      const [agentPda] = findAgentPda(agent.publicKey);
+
       const [bitmapPda] = findBitmapPda(adPda, 4);
       const [depositPda] = findDepositPda(advertiser.publicKey);
       const [configPda] = findConfigPda();
@@ -1039,12 +1008,12 @@ describe("verifiable-ad-protocol", () => {
         createEd25519Ix(curator.secretKey, message),
         createEd25519Ix(agent.secretKey, message),
         await program.methods
-          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0, agent.publicKey)
           .accounts({
             adAccount: adPda,
             screenerAccount: screenerPda,
             curatorAccount: curatorPda,
-            agentRegistry: agentPda,
+
             impressionBitmap: bitmapPda,
             depositAccount: depositPda,
             protocolConfig: configPda,
@@ -1075,7 +1044,7 @@ describe("verifiable-ad-protocol", () => {
       const [adPda] = findAdPda(advertiser.publicKey, 0);
       const [screenerPda] = findScreenerPda(screener.publicKey);
       const [curatorPda] = findCuratorPda(curator.publicKey);
-      const [agentPda] = findAgentPda(agent.publicKey);
+
       const [bitmapPda] = findBitmapPda(adPda, 5);
       const [depositPda] = findDepositPda(advertiser.publicKey);
       const [configPda] = findConfigPda();
@@ -1095,12 +1064,12 @@ describe("verifiable-ad-protocol", () => {
         createEd25519Ix(curator.secretKey, message),
         createEd25519Ix(agent.secretKey, message),
         await program.methods
-          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0, agent.publicKey)
           .accounts({
             adAccount: adPda,
             screenerAccount: screenerPda,
             curatorAccount: curatorPda,
-            agentRegistry: agentPda,
+
             impressionBitmap: bitmapPda,
             depositAccount: depositPda,
             protocolConfig: configPda,
