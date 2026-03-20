@@ -29,6 +29,8 @@ import {
 import { Program, AnchorProvider } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { createHash } from "crypto";
+import { readFileSync } from "fs";
+import { homedir } from "os";
 import { PROGRAM_ID, BITS_PER_BITMAP, IDL } from "@verifiable-ad-protocol/core";
 
 // ── Config ────────────────────────────────────────────────────
@@ -37,7 +39,8 @@ const isDevnet = process.argv.includes("--devnet");
 const RPC_URL = isDevnet
   ? "https://api.devnet.solana.com"
   : "http://localhost:8899";
-const AIRDROP_AMOUNT = isDevnet ? 2 * LAMPORTS_PER_SOL : 10 * LAMPORTS_PER_SOL;
+const FUND_AMOUNT = isDevnet ? 0.5 * LAMPORTS_PER_SOL : 10 * LAMPORTS_PER_SOL;
+const DEPOSIT_AMOUNT = isDevnet ? 0.1 * LAMPORTS_PER_SOL : LAMPORTS_PER_SOL;
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -96,13 +99,33 @@ async function main() {
   const treasury = Keypair.generate();
   ok("6 keypairs generated");
 
-  // Step 2: Airdrop
+  // Step 2: Fund keypairs
   log("2", "Funding keypairs...");
-  for (const kp of [authority, advertiser, screener, curator, agent, treasury]) {
-    const sig = await connection.requestAirdrop(kp.publicKey, AIRDROP_AMOUNT);
+  const targets = [authority, advertiser, screener, curator, agent, treasury];
+  if (isDevnet) {
+    const funderKey = JSON.parse(
+      readFileSync(`${homedir()}/.config/solana/id.json`, "utf-8"),
+    );
+    const funder = Keypair.fromSecretKey(Uint8Array.from(funderKey));
+    const tx = new Transaction();
+    for (const kp of targets) {
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: funder.publicKey,
+          toPubkey: kp.publicKey,
+          lamports: FUND_AMOUNT,
+        }),
+      );
+    }
+    const sig = await sendAndConfirmTransaction(connection, tx, [funder]);
     await connection.confirmTransaction(sig, "confirmed");
+  } else {
+    for (const kp of targets) {
+      const sig = await connection.requestAirdrop(kp.publicKey, FUND_AMOUNT);
+      await connection.confirmTransaction(sig, "confirmed");
+    }
   }
-  ok(`All funded (${AIRDROP_AMOUNT / LAMPORTS_PER_SOL} SOL each)`);
+  ok(`All funded (${FUND_AMOUNT / LAMPORTS_PER_SOL} SOL each)`);
 
   // Anchor program setup — helper to create program with specific signer as fee payer
   const idlWithAddr = { ...IDL, address: programId.toBase58() };
@@ -131,37 +154,43 @@ async function main() {
 
   // Step 3: Initialize ProtocolConfig
   log("3", "Initializing ProtocolConfig...");
-  await (programFor(authority).methods as any)
-    .initializeConfig(50, treasury.publicKey)
-    .accounts({
-      authority: authority.publicKey,
-      protocolConfig: configPda,
-      systemProgram: SystemProgram.programId,
-    })
-    .rpc();
-  ok(`Protocol fee: 0.5%, Treasury: ${treasury.publicKey.toBase58().slice(0, 12)}...`);
+  const configInfo = await connection.getAccountInfo(configPda);
+  if (configInfo) {
+    ok("ProtocolConfig already exists — skipping");
+  } else {
+    await (programFor(authority).methods as any)
+      .initializeConfig(50, treasury.publicKey)
+      .accounts({
+        authority: authority.publicKey,
+        protocolConfig: configPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    ok(`Protocol fee: 0.5%, Treasury: ${treasury.publicKey.toBase58().slice(0, 12)}...`);
+  }
 
   // Step 4: Advertiser deposit + register ad
   log("4", "Advertiser: deposit + register ad...");
   await (programFor(advertiser).methods as any)
-    .depositFunds(new BN(LAMPORTS_PER_SOL))
+    .depositFunds(new BN(DEPOSIT_AMOUNT))
     .accounts({
       advertiser: advertiser.publicKey,
       depositAccount: depositPda,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
-  ok("Deposited 1 SOL");
+  ok(`Deposited ${DEPOSIT_AMOUNT / LAMPORTS_PER_SOL} SOL`);
 
+  const AD_BUDGET = isDevnet ? 0.05 * LAMPORTS_PER_SOL : LAMPORTS_PER_SOL / 2;
   await (programFor(advertiser).methods as any)
-    .registerAd(adIndex, new BN(LAMPORTS_PER_SOL / 2), new BN(10_000_000), 2000, [screener.publicKey], [])
+    .registerAd(adIndex, new BN(AD_BUDGET), new BN(10_000_000), 2000, [screener.publicKey], [])
     .accounts({
       advertiser: advertiser.publicKey,
       adAccount: adPda,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
-  ok(`Ad registered (budget: 0.5 SOL, max_cpm: 0.01 SOL, PDA: ${adPda.toBase58().slice(0, 12)}...)`);
+  ok(`Ad registered (budget: ${AD_BUDGET / LAMPORTS_PER_SOL} SOL, max_cpm: 0.01 SOL, PDA: ${adPda.toBase58().slice(0, 12)}...)`);
 
   // Step 5: Register Screener
   log("5", "Registering Screener...");
