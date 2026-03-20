@@ -104,15 +104,17 @@ async function main() {
   }
   ok(`All funded (${AIRDROP_AMOUNT / LAMPORTS_PER_SOL} SOL each)`);
 
-  // Anchor program setup
-  const wallet = {
-    publicKey: authority.publicKey,
-    signTransaction: async (tx: any) => { tx.sign(authority); return tx; },
-    signAllTransactions: async (txs: any[]) => { txs.forEach(tx => tx.sign(authority)); return txs; },
-  };
-  const provider = new AnchorProvider(connection, wallet as any, { commitment: "confirmed" });
+  // Anchor program setup — helper to create program with specific signer as fee payer
   const idlWithAddr = { ...IDL, address: programId.toBase58() };
-  const program = new Program(idlWithAddr as any, provider);
+  function programFor(kp: Keypair): Program {
+    const w = {
+      publicKey: kp.publicKey,
+      signTransaction: async (tx: any) => { tx.sign(kp); return tx; },
+      signAllTransactions: async (txs: any[]) => { txs.forEach(tx => tx.sign(kp)); return txs; },
+    };
+    const p = new AnchorProvider(connection, w as any, { commitment: "confirmed" });
+    return new Program(idlWithAddr as any, p);
+  }
 
   // PDA helpers
   const findPda = (seeds: Buffer[]) => PublicKey.findProgramAddressSync(seeds, programId);
@@ -129,64 +131,59 @@ async function main() {
 
   // Step 3: Initialize ProtocolConfig
   log("3", "Initializing ProtocolConfig...");
-  await (program.methods as any)
+  await (programFor(authority).methods as any)
     .initializeConfig(50, authority.publicKey)
     .accounts({
       authority: authority.publicKey,
       protocolConfig: configPda,
       systemProgram: SystemProgram.programId,
     })
-    .signers([authority])
     .rpc();
   ok("Protocol fee: 0.5%, Treasury: authority");
 
   // Step 4: Advertiser deposit + register ad
   log("4", "Advertiser: deposit + register ad...");
-  await (program.methods as any)
+  await (programFor(advertiser).methods as any)
     .depositFunds(new BN(LAMPORTS_PER_SOL))
     .accounts({
       advertiser: advertiser.publicKey,
       depositAccount: depositPda,
       systemProgram: SystemProgram.programId,
     })
-    .signers([advertiser])
     .rpc();
   ok("Deposited 1 SOL");
 
-  await (program.methods as any)
+  await (programFor(advertiser).methods as any)
     .registerAd(adIndex, new BN(LAMPORTS_PER_SOL / 2), new BN(10_000_000), 2000, [screener.publicKey], [])
     .accounts({
       advertiser: advertiser.publicKey,
       adAccount: adPda,
       systemProgram: SystemProgram.programId,
     })
-    .signers([advertiser])
     .rpc();
   ok(`Ad registered (budget: 0.5 SOL, max_cpm: 0.01 SOL, PDA: ${adPda.toBase58().slice(0, 12)}...)`);
 
   // Step 5: Register Screener
   log("5", "Registering Screener...");
-  await (program.methods as any)
+  await (programFor(screener).methods as any)
     .registerScreener(1500, [curator.publicKey])
     .accounts({
       screener: screener.publicKey,
       screenerAccount: screenerPda,
       systemProgram: SystemProgram.programId,
     })
-    .signers([screener])
     .rpc();
   ok("Screener registered (share: 15%, endorses curator)");
 
   // Step 6: Register Curator
   log("6", "Registering Curator...");
-  await (program.methods as any)
+  await (programFor(curator).methods as any)
     .registerCurator("https://example.com/meta.json", 100)
     .accounts({
       curator: curator.publicKey,
       curatorAccount: curatorPda,
       systemProgram: SystemProgram.programId,
     })
-    .signers([curator])
     .rpc();
   ok("Curator registered (rate limit: 100/window)");
 
@@ -197,7 +194,7 @@ async function main() {
   chunkBytes.writeUInt16LE(chunkIndex);
   const [bitmapPda] = findPda([Buffer.from("bitmap"), adPda.toBuffer(), chunkBytes]);
 
-  await (program.methods as any)
+  await (programFor(agent).methods as any)
     .initializeBitmap(chunkIndex)
     .accounts({
       adAccount: adPda,
@@ -205,7 +202,6 @@ async function main() {
       payer: agent.publicKey,
       systemProgram: SystemProgram.programId,
     })
-    .signers([agent])
     .rpc();
   ok("Bitmap initialized");
 
@@ -232,7 +228,7 @@ async function main() {
   const ix1 = createEd25519Ix(curator.secretKey, message);
   const ix2 = createEd25519Ix(agent.secretKey, message);
 
-  const ix3 = await (program.methods as any)
+  const ix3 = await (programFor(agent).methods as any)
     .recordImpression(nonce, Array.from(contextHash), timestamp, chunkIndex, agent.publicKey)
     .accounts({
       adAccount: adPda,
@@ -257,7 +253,7 @@ async function main() {
   // Step 9: Verify on-chain state
   log("9", "Verifying on-chain state...");
 
-  const ad = await (program.account as any).adAccount.fetch(adPda);
+  const ad = await (programFor(authority).account as any).adAccount.fetch(adPda);
   const perImpression = 10_000; // max_cpm / 1000
   const protocolFee = 50;       // 10_000 * 50 / 10000
   const afterFee = 9_950;
@@ -291,11 +287,11 @@ async function main() {
   ok(`Deposit deduction: ${perImpression + submissionFee} lamports (impression + submission fee)`);
 
   // Screener + Curator counters
-  const screenerAcc = await (program.account as any).screenerAccount.fetch(screenerPda);
+  const screenerAcc = await (programFor(authority).account as any).screenerAccount.fetch(screenerPda);
   if (screenerAcc.totalScreened.toNumber() !== 1) throw new Error("screener totalScreened mismatch");
   ok(`Screener totalScreened: ${screenerAcc.totalScreened.toNumber()}`);
 
-  const curatorAcc = await (program.account as any).curatorAccount.fetch(curatorPda);
+  const curatorAcc = await (programFor(authority).account as any).curatorAccount.fetch(curatorPda);
   if (curatorAcc.totalVerifiedImpressions.toNumber() !== 1) throw new Error("curator totalVerifiedImpressions mismatch");
   ok(`Curator totalVerifiedImpressions: ${curatorAcc.totalVerifiedImpressions.toNumber()}`);
 
