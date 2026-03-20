@@ -84,7 +84,7 @@ describe("verifiable-ad-protocol", () => {
       const [configPda] = findConfigPda();
 
       await program.methods
-        .initializeConfig(50, treasury.publicKey, new BN(5_000))
+        .initializeConfig(50, treasury.publicKey)
         .accounts({
           authority: authority.publicKey,
           protocolConfig: configPda,
@@ -101,7 +101,7 @@ describe("verifiable-ad-protocol", () => {
       expect(config.treasury.toString()).to.equal(
         treasury.publicKey.toString()
       );
-      expect(config.submissionFeeLamports.toNumber()).to.equal(5_000);
+
     });
 
     it("fails when called a second time (PDA already exists)", async () => {
@@ -109,7 +109,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .initializeConfig(50, treasury.publicKey, new BN(5_000))
+          .initializeConfig(50, treasury.publicKey)
           .accounts({
             authority: authority.publicKey,
             protocolConfig: configPda,
@@ -129,7 +129,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .initializeConfig(10001, treasury.publicKey, new BN(5_000))
+          .initializeConfig(10001, treasury.publicKey)
           .accounts({
             authority: newAuthority.publicKey,
             protocolConfig: findConfigPda()[0],
@@ -587,7 +587,7 @@ describe("verifiable-ad-protocol", () => {
       const newTreasury = Keypair.generate();
 
       await program.methods
-        .updateConfig(100, newTreasury.publicKey, new BN(10_000))
+        .updateConfig(100, newTreasury.publicKey)
         .accounts({
           authority: authority.publicKey,
           protocolConfig: configPda,
@@ -598,11 +598,9 @@ describe("verifiable-ad-protocol", () => {
       const config = await program.account.protocolConfig.fetch(configPda);
       expect(config.protocolFeeBps).to.equal(100);
       expect(config.treasury.toString()).to.equal(newTreasury.publicKey.toString());
-      expect(config.submissionFeeLamports.toNumber()).to.equal(10_000);
-
       // Restore original values for subsequent tests
       await program.methods
-        .updateConfig(50, treasury.publicKey, new BN(5_000))
+        .updateConfig(50, treasury.publicKey)
         .accounts({
           authority: authority.publicKey,
           protocolConfig: configPda,
@@ -618,7 +616,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .updateConfig(50, treasury.publicKey, new BN(5_000))
+          .updateConfig(50, treasury.publicKey)
           .accounts({
             authority: imposter.publicKey,
             protocolConfig: configPda,
@@ -636,7 +634,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .updateConfig(10001, treasury.publicKey, new BN(5_000))
+          .updateConfig(10001, treasury.publicKey)
           .accounts({
             authority: authority.publicKey,
             protocolConfig: configPda,
@@ -649,23 +647,6 @@ describe("verifiable-ad-protocol", () => {
       }
     });
 
-    it("fails with submission_fee_lamports = 0", async () => {
-      const [configPda] = findConfigPda();
-
-      try {
-        await program.methods
-          .updateConfig(50, treasury.publicKey, new BN(0))
-          .accounts({
-            authority: authority.publicKey,
-            protocolConfig: configPda,
-          })
-          .signers([authority])
-          .rpc();
-        expect.fail("should have thrown");
-      } catch (err: any) {
-        expect(err.error.errorCode.code).to.equal("ZeroBudget");
-      }
-    });
   });
 
   // ─── 11. record_impression (Sub-phase 2) ──────────────────────────────────

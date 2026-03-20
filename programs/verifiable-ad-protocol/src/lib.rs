@@ -24,16 +24,13 @@ pub mod verifiable_ad_protocol {
         ctx: Context<InitializeConfig>,
         protocol_fee_bps: u16,
         treasury: Pubkey,
-        submission_fee_lamports: u64,
     ) -> Result<()> {
         require!(protocol_fee_bps <= 10000, ProtocolError::InvalidShareBps);
-        require!(submission_fee_lamports > 0, ProtocolError::ZeroBudget);
 
         let config = &mut ctx.accounts.protocol_config;
         config.authority = ctx.accounts.authority.key();
         config.protocol_fee_bps = protocol_fee_bps;
         config.treasury = treasury;
-        config.submission_fee_lamports = submission_fee_lamports;
         config.bump = ctx.bumps.protocol_config;
         Ok(())
     }
@@ -210,15 +207,12 @@ pub mod verifiable_ad_protocol {
         ctx: Context<UpdateConfig>,
         protocol_fee_bps: u16,
         treasury: Pubkey,
-        submission_fee_lamports: u64,
     ) -> Result<()> {
         require!(protocol_fee_bps <= 10000, ProtocolError::InvalidShareBps);
-        require!(submission_fee_lamports > 0, ProtocolError::ZeroBudget);
 
         let config = &mut ctx.accounts.protocol_config;
         config.protocol_fee_bps = protocol_fee_bps;
         config.treasury = treasury;
-        config.submission_fee_lamports = submission_fee_lamports;
         Ok(())
     }
 
@@ -352,7 +346,7 @@ pub mod verifiable_ad_protocol {
         require!(new_spent <= ad.budget_lamports, ProtocolError::InsufficientBudget);
 
         // Deposit must cover both rewards AND submission fee
-        let submission_fee = ctx.accounts.protocol_config.submission_fee_lamports;
+        let submission_fee = SUBMISSION_FEE_LAMPORTS;
         let total_deduction = per_impression
             .checked_add(submission_fee)
             .ok_or(ProtocolError::ArithmeticOverflow)?;

@@ -20,4 +20,4 @@ pub const MAX_TIMESTAMP_AGE_SECONDS: i64 = 300; // 5 minutes
 pub const MAX_TIMESTAMP_FUTURE_SECONDS: i64 = 60; // 1 minute
 
 // Submission fee paid to tx payer to cover gas costs (separate from CPM rewards)
-pub const DEFAULT_SUBMISSION_FEE_LAMPORTS: u64 = 5_000;
+pub const SUBMISSION_FEE_LAMPORTS: u64 = 5_000;

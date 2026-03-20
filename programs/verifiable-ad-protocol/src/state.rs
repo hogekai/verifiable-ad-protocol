@@ -9,12 +9,11 @@ pub struct ProtocolConfig {
     pub authority: Pubkey,
     pub protocol_fee_bps: u16,
     pub treasury: Pubkey,
-    pub submission_fee_lamports: u64,
     pub bump: u8,
 }
 
-// space = 8 + 32 + 2 + 32 + 8 + 1 = 83
-pub const PROTOCOL_CONFIG_SPACE: usize = 83;
+// space = 8 + 32 + 2 + 32 + 1 = 75
+pub const PROTOCOL_CONFIG_SPACE: usize = 75;
 
 /// Advertiser deposit pool. SOL balance is tracked via account lamports.
 /// PDA seeds: ["deposit", advertiser.key()]
