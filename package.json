@@ -11,7 +11,7 @@
     "build:anchor": "anchor build && cp target/idl/verifiable_ad_protocol.json packages/core/src/idl/"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.30.1"
+    "@coral-xyz/anchor": "^0.32.1"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.0",

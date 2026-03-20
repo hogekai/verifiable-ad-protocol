@@ -3,9 +3,145 @@
   "metadata": {
     "name": "verifiable_ad_protocol",
     "version": "0.1.0",
-    "spec": "0.1.0"
+    "spec": "0.1.0",
+    "description": "Verifiable Ad Delivery Protocol on Solana"
   },
   "instructions": [
+    {
+      "name": "deposit_funds",
+      "discriminator": [
+        202,
+        39,
+        52,
+        211,
+        53,
+        20,
+        250,
+        88
+      ],
+      "accounts": [
+        {
+          "name": "advertiser",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "deposit_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "advertiser"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_lamports",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_bitmap",
+      "discriminator": [
+        25,
+        109,
+        200,
+        45,
+        209,
+        118,
+        74,
+        69
+      ],
+      "accounts": [
+        {
+          "name": "ad_account",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ad_account.advertiser",
+                "account": "AdAccount"
+              },
+              {
+                "kind": "account",
+                "path": "ad_account.ad_index",
+                "account": "AdAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "impression_bitmap",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  116,
+                  109,
+                  97,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ad_account"
+              },
+              {
+                "kind": "arg",
+                "path": "chunk_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "chunk_index",
+          "type": "u16"
+        }
+      ]
+    },
     {
       "name": "initialize_config",
       "discriminator": [
@@ -60,22 +196,120 @@
       ]
     },
     {
-      "name": "deposit_funds",
+      "name": "record_impression",
       "discriminator": [
-        202,
-        39,
-        52,
-        211,
-        53,
-        20,
-        250,
-        88
+        118,
+        199,
+        131,
+        33,
+        198,
+        152,
+        151,
+        235
       ],
       "accounts": [
         {
-          "name": "advertiser",
+          "name": "ad_account",
           "writable": true,
-          "signer": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ad_account.advertiser",
+                "account": "AdAccount"
+              },
+              {
+                "kind": "account",
+                "path": "ad_account.ad_index",
+                "account": "AdAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "screener_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  101,
+                  101,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "screener_account.screener",
+                "account": "ScreenerAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "curator_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "curator_account.curator",
+                "account": "CuratorAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "impression_bitmap",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  116,
+                  109,
+                  97,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ad_account"
+              },
+              {
+                "kind": "arg",
+                "path": "chunk_index"
+              }
+            ]
+          }
         },
         {
           "name": "deposit_account",
@@ -96,10 +330,53 @@
               },
               {
                 "kind": "account",
-                "path": "advertiser"
+                "path": "ad_account.advertiser",
+                "account": "AdAccount"
               }
             ]
           }
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "screener_wallet",
+          "writable": true
+        },
+        {
+          "name": "curator_wallet",
+          "writable": true
+        },
+        {
+          "name": "protocol_treasury",
+          "writable": true
+        },
+        {
+          "name": "instructions_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Payer who submits the tx. Receives submission_fee from deposit."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
           "name": "system_program",
@@ -108,8 +385,29 @@
       ],
       "args": [
         {
-          "name": "amount_lamports",
+          "name": "impression_nonce",
           "type": "u64"
+        },
+        {
+          "name": "context_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        },
+        {
+          "name": "chunk_index",
+          "type": "u16"
+        },
+        {
+          "name": "agent_pubkey",
+          "type": "pubkey"
         }
       ]
     },
@@ -191,6 +489,64 @@
       ]
     },
     {
+      "name": "register_curator",
+      "discriminator": [
+        52,
+        114,
+        54,
+        130,
+        202,
+        91,
+        115,
+        104
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "curator_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "curator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "metadata_uri",
+          "type": "string"
+        },
+        {
+          "name": "rate_limit_max_per_window",
+          "type": "u32"
+        }
+      ]
+    },
+    {
       "name": "register_screener",
       "discriminator": [
         24,
@@ -252,64 +608,6 @@
       ]
     },
     {
-      "name": "register_curator",
-      "discriminator": [
-        52,
-        114,
-        54,
-        130,
-        202,
-        91,
-        115,
-        104
-      ],
-      "accounts": [
-        {
-          "name": "curator",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "curator_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  117,
-                  114,
-                  97,
-                  116,
-                  111,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "curator"
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "metadata_uri",
-          "type": "string"
-        },
-        {
-          "name": "rate_limit_max_per_window",
-          "type": "u32"
-        }
-      ]
-    },
-    {
       "name": "update_ad",
       "discriminator": [
         28,
@@ -324,7 +622,10 @@
       "accounts": [
         {
           "name": "advertiser",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "ad_account"
+          ]
         },
         {
           "name": "ad_account",
@@ -344,7 +645,8 @@
               },
               {
                 "kind": "account",
-                "path": "ad_account.ad_index"
+                "path": "ad_account.ad_index",
+                "account": "AdAccount"
               }
             ]
           }
@@ -382,6 +684,113 @@
       ]
     },
     {
+      "name": "update_config",
+      "discriminator": [
+        29,
+        158,
+        252,
+        191,
+        10,
+        83,
+        219,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_config"
+          ]
+        },
+        {
+          "name": "protocol_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "protocol_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "treasury",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "update_curator",
+      "discriminator": [
+        145,
+        211,
+        127,
+        84,
+        78,
+        36,
+        110,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "curator",
+          "signer": true,
+          "relations": [
+            "curator_account"
+          ]
+        },
+        {
+          "name": "curator_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  117,
+                  114,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "curator"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "metadata_uri",
+          "type": "string"
+        },
+        {
+          "name": "rate_limit_max_per_window",
+          "type": "u32"
+        }
+      ]
+    },
+    {
       "name": "update_screener",
       "discriminator": [
         233,
@@ -396,7 +805,10 @@
       "accounts": [
         {
           "name": "screener",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "screener_account"
+          ]
         },
         {
           "name": "screener_account",
@@ -436,423 +848,9 @@
           }
         }
       ]
-    },
-    {
-      "name": "update_curator",
-      "discriminator": [
-        145,
-        211,
-        127,
-        84,
-        78,
-        36,
-        110,
-        225
-      ],
-      "accounts": [
-        {
-          "name": "curator",
-          "signer": true
-        },
-        {
-          "name": "curator_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  117,
-                  114,
-                  97,
-                  116,
-                  111,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "curator"
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "metadata_uri",
-          "type": "string"
-        },
-        {
-          "name": "rate_limit_max_per_window",
-          "type": "u32"
-        }
-      ]
-    },
-    {
-      "name": "update_config",
-      "discriminator": [
-        29,
-        158,
-        252,
-        191,
-        10,
-        83,
-        219,
-        99
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "signer": true
-        },
-        {
-          "name": "protocol_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "protocol_fee_bps",
-          "type": "u16"
-        },
-        {
-          "name": "treasury",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "initialize_bitmap",
-      "discriminator": [
-        25,
-        109,
-        200,
-        45,
-        209,
-        118,
-        74,
-        69
-      ],
-      "accounts": [
-        {
-          "name": "ad_account",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  100
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "ad_account.advertiser"
-              },
-              {
-                "kind": "account",
-                "path": "ad_account.ad_index"
-              }
-            ]
-          }
-        },
-        {
-          "name": "impression_bitmap",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  105,
-                  116,
-                  109,
-                  97,
-                  112
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "ad_account"
-              },
-              {
-                "kind": "arg",
-                "path": "chunk_index"
-              }
-            ]
-          }
-        },
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "chunk_index",
-          "type": "u16"
-        }
-      ]
-    },
-    {
-      "name": "record_impression",
-      "discriminator": [
-        118,
-        199,
-        131,
-        33,
-        198,
-        152,
-        151,
-        235
-      ],
-      "accounts": [
-        {
-          "name": "ad_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  100
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "ad_account.advertiser"
-              },
-              {
-                "kind": "account",
-                "path": "ad_account.ad_index"
-              }
-            ]
-          }
-        },
-        {
-          "name": "screener_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  99,
-                  114,
-                  101,
-                  101,
-                  110,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "screener_account.screener"
-              }
-            ]
-          }
-        },
-        {
-          "name": "curator_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  117,
-                  114,
-                  97,
-                  116,
-                  111,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "curator_account.curator"
-              }
-            ]
-          }
-        },
-        {
-          "name": "impression_bitmap",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  105,
-                  116,
-                  109,
-                  97,
-                  112
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "ad_account"
-              },
-              {
-                "kind": "arg",
-                "path": "chunk_index"
-              }
-            ]
-          }
-        },
-        {
-          "name": "deposit_account",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  101,
-                  112,
-                  111,
-                  115,
-                  105,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "ad_account.advertiser"
-              }
-            ]
-          }
-        },
-        {
-          "name": "protocol_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "screener_wallet",
-          "writable": true
-        },
-        {
-          "name": "curator_wallet",
-          "writable": true
-        },
-        {
-          "name": "protocol_treasury",
-          "writable": true
-        },
-        {
-          "name": "instructions_sysvar",
-          "address": "Sysvar1nstructions1111111111111111111111111"
-        },
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "impression_nonce",
-          "type": "u64"
-        },
-        {
-          "name": "context_hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "timestamp",
-          "type": "i64"
-        },
-        {
-          "name": "chunk_index",
-          "type": "u16"
-        },
-        {
-          "name": "agent_pubkey",
-          "type": "pubkey"
-        }
-      ]
     }
   ],
   "accounts": [
-    {
-      "name": "ProtocolConfig",
-      "discriminator": [
-        207,
-        91,
-        250,
-        28,
-        152,
-        179,
-        215,
-        209
-      ]
-    },
-    {
-      "name": "DepositAccount",
-      "discriminator": [
-        148,
-        37,
-        207,
-        116,
-        61,
-        33,
-        53,
-        179
-      ]
-    },
     {
       "name": "AdAccount",
       "discriminator": [
@@ -864,19 +862,6 @@
         45,
         38,
         197
-      ]
-    },
-    {
-      "name": "ScreenerAccount",
-      "discriminator": [
-        21,
-        11,
-        117,
-        212,
-        136,
-        64,
-        72,
-        96
       ]
     },
     {
@@ -893,6 +878,19 @@
       ]
     },
     {
+      "name": "DepositAccount",
+      "discriminator": [
+        148,
+        37,
+        207,
+        116,
+        61,
+        33,
+        53,
+        179
+      ]
+    },
+    {
       "name": "ImpressionBitmap",
       "discriminator": [
         234,
@@ -903,6 +901,32 @@
         212,
         171,
         234
+      ]
+    },
+    {
+      "name": "ProtocolConfig",
+      "discriminator": [
+        207,
+        91,
+        250,
+        28,
+        152,
+        179,
+        215,
+        209
+      ]
+    },
+    {
+      "name": "ScreenerAccount",
+      "discriminator": [
+        21,
+        11,
+        117,
+        212,
+        136,
+        64,
+        72,
+        96
       ]
     }
   ],
@@ -1035,47 +1059,11 @@
   ],
   "types": [
     {
-      "name": "ProtocolConfig",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "authority",
-            "type": "pubkey"
-          },
-          {
-            "name": "protocol_fee_bps",
-            "type": "u16"
-          },
-          {
-            "name": "treasury",
-            "type": "pubkey"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
-      "name": "DepositAccount",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "advertiser",
-            "type": "pubkey"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
       "name": "AdAccount",
+      "docs": [
+        "Individual ad registered by an advertiser.",
+        "PDA seeds: [\"ad\", advertiser.key(), ad_index.to_le_bytes()]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -1147,49 +1135,11 @@
       }
     },
     {
-      "name": "ScreenerAccount",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "screener",
-            "type": "pubkey"
-          },
-          {
-            "name": "declared_share_bps",
-            "type": "u16"
-          },
-          {
-            "name": "endorsed_curators",
-            "type": {
-              "vec": "pubkey"
-            }
-          },
-          {
-            "name": "staked_amount",
-            "type": "u64"
-          },
-          {
-            "name": "slashable",
-            "type": "bool"
-          },
-          {
-            "name": "is_active",
-            "type": "bool"
-          },
-          {
-            "name": "total_screened",
-            "type": "u64"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
       "name": "CuratorAccount",
+      "docs": [
+        "Curator (ad delivery service) account.",
+        "PDA seeds: [\"curator\", curator.key()]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -1229,7 +1179,31 @@
       }
     },
     {
+      "name": "DepositAccount",
+      "docs": [
+        "Advertiser deposit pool. SOL balance is tracked via account lamports.",
+        "PDA seeds: [\"deposit\", advertiser.key()]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "advertiser",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "ImpressionBitmap",
+      "docs": [
+        "Bitmap for impression deduplication per ad.",
+        "PDA seeds: [\"bitmap\", ad_account.key(), chunk_index.to_le_bytes()]"
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -1249,6 +1223,80 @@
                 1024
               ]
             }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolConfig",
+      "docs": [
+        "Protocol-wide configuration singleton.",
+        "PDA seeds: [\"config\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "treasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScreenerAccount",
+      "docs": [
+        "Screener (ad quality filter) account.",
+        "PDA seeds: [\"screener\", screener.key()]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "screener",
+            "type": "pubkey"
+          },
+          {
+            "name": "declared_share_bps",
+            "type": "u16"
+          },
+          {
+            "name": "endorsed_curators",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "staked_amount",
+            "type": "u64"
+          },
+          {
+            "name": "slashable",
+            "type": "bool"
+          },
+          {
+            "name": "is_active",
+            "type": "bool"
+          },
+          {
+            "name": "total_screened",
+            "type": "u64"
           },
           {
             "name": "bump",

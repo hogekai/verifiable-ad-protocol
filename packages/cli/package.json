@@ -11,7 +11,7 @@
   "dependencies": {
     "@verifiable-ad-protocol/core": "0.1.0",
     "@verifiable-ad-protocol/screener": "0.1.0",
-    "@coral-xyz/anchor": "^0.30.1",
+    "@coral-xyz/anchor": "^0.32.1",
     "@solana/web3.js": "^1.95.0",
     "commander": "^12.0.0",
     "bn.js": "^5.2.1"

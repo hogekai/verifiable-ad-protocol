@@ -354,7 +354,7 @@ pub mod verifiable_ad_protocol {
             .try_to_vec()
             .map_err(|_| ProtocolError::ArithmeticOverflow)?;
 
-        let message_hash = anchor_lang::solana_program::hash::hash(&message_bytes);
+        let message_hash = solana_sha256_hasher::hash(&message_bytes);
 
         let instructions_sysvar = &ctx.accounts.instructions_sysvar;
 

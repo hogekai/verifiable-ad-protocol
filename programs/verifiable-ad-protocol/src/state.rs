@@ -148,7 +148,7 @@ mod tests {
         assert_eq!(actual_hex, expected_hex, "Borsh hex mismatch between Rust and TypeScript");
 
         // Also verify SHA-256 hash
-        let hash = anchor_lang::solana_program::hash::hash(&bytes);
+        let hash = solana_sha256_hasher::hash(&bytes);
         println!("BORSH_HEX={}", actual_hex);
         println!("SHA256_HEX={}", hash);
     }
