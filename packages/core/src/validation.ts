@@ -6,7 +6,7 @@ export function validateAdSlot(slot: unknown): slot is AdSlot {
   const s = slot as Record<string, unknown>;
 
   // Required string fields
-  for (const key of ["ad_id", "screener_pubkey", "screener_signature",
+  for (const key of ["ad_id", "advertiser", "screener_pubkey", "screener_signature",
                       "curator_pubkey", "curator_signature", "context_hash"]) {
     if (typeof s[key] !== "string") return false;
   }
@@ -14,6 +14,7 @@ export function validateAdSlot(slot: unknown): slot is AdSlot {
   // Pubkey format check
   try {
     new PublicKey(s.ad_id as string);
+    new PublicKey(s.advertiser as string);
     new PublicKey(s.screener_pubkey as string);
     new PublicKey(s.curator_pubkey as string);
   } catch { return false; }

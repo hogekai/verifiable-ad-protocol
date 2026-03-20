@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 /** Ad slot delivered by Curator in MCP response */
 export interface AdSlot {
   ad_id: string;                  // AdAccount pubkey (base58)
+  advertiser: string;             // advertiser pubkey (base58)
   screener_pubkey: string;        // base58
   screener_signature: string;     // base64 Ed25519 signature
   curator_pubkey: string;         // base58

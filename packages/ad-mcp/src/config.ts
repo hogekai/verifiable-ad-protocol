@@ -3,8 +3,10 @@ import { join } from "path";
 import { homedir } from "os";
 
 export interface AdMcpConfig {
-  vaulx_endpoint: string;
-  vaulx_auth_token: string;
+  wallet_mode: "http" | "keypair";
+  wallet_endpoint: string;
+  wallet_auth_token: string;
+  wallet_private_key?: string;
   solana_rpc: string;
   program_id: string;
   auto_sign: boolean;
@@ -37,8 +39,9 @@ export function saveConfig(config: AdMcpConfig): void {
 
 export function defaultConfig(): AdMcpConfig {
   return {
-    vaulx_endpoint: "http://127.0.0.1:18420",
-    vaulx_auth_token: "",
+    wallet_mode: "http",
+    wallet_endpoint: "http://127.0.0.1:18420",
+    wallet_auth_token: "",
     solana_rpc: "https://api.devnet.solana.com",
     program_id: "7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf",
     auto_sign: true,

@@ -2,8 +2,8 @@ import { createMCPServer } from "@lynq/lynq";
 import { z } from "zod";
 import { join } from "path";
 
-import { VaulxClient } from "./vaulx-client.js";
-import { NonceManager } from "./nonce-manager.js";
+import { HttpWalletProvider, LocalKeypairProvider } from "./wallet-provider.js";
+import type { WalletProvider } from "./wallet-provider.js";
 import { RetryQueue } from "./retry-queue.js";
 import { loadConfig, getConfigDir } from "./config.js";
 import { processAd } from "./tools/process-ad.js";
@@ -15,6 +15,7 @@ import { PublicKey } from "@solana/web3.js";
 
 const AdSlotSchema = z.object({
   ad_id: z.string(),
+  advertiser: z.string(),
   screener_pubkey: z.string(),
   screener_signature: z.string(),
   curator_pubkey: z.string(),
@@ -35,8 +36,15 @@ const AdSlotSchema = z.object({
 
 let config = loadConfig();
 const dbPath = join(getConfigDir(), "ad-mcp.db");
-const vaulx = new VaulxClient(config.vaulx_endpoint, config.vaulx_auth_token);
-const nonceManager = new NonceManager(dbPath);
+
+let wallet: WalletProvider;
+if (config.wallet_mode === "keypair") {
+  const keyBytes = Buffer.from(config.wallet_private_key!, "base64");
+  wallet = new LocalKeypairProvider(keyBytes, config.solana_rpc);
+} else {
+  wallet = new HttpWalletProvider(config.wallet_endpoint, config.wallet_auth_token);
+}
+
 const retryQueue = new RetryQueue(dbPath);
 
 const server = createMCPServer({
@@ -55,8 +63,7 @@ server.tool(
   async (args, c) => {
     const result = await processAd({
       slot: args.ad_slot,
-      vaulx,
-      nonceManager,
+      wallet,
       retryQueue,
       programId: new PublicKey(config.program_id),
       solanaRpc: config.solana_rpc,

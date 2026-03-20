@@ -43,6 +43,7 @@ function makeTestSlot(agentPubkey: PublicKey): { slot: AdSlot; agentSignature: U
 
   const slot: AdSlot = {
     ad_id: adId.toBase58(),
+    advertiser: new PublicKey(new Uint8Array(32).fill(5)).toBase58(),
     screener_pubkey: new PublicKey(screenerKp.publicKey).toBase58(),
     screener_signature: Buffer.from(screenerSig).toString("base64"),
     curator_pubkey: new PublicKey(curatorKp.publicKey).toBase58(),

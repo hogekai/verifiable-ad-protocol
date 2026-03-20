@@ -50,35 +50,62 @@ async function main() {
 
   console.log("\n  ad-mcp — Agent Ad Protocol MCP Server\n");
 
-  let vaulxEndpoint = "http://127.0.0.1:18420";
-  let vaulxAuthToken = "";
+  // Wallet provider selection
+  console.log("  Wallet provider:");
+  console.log("    1. vaulx (auto-detect from ~/.vaulx/)");
+  console.log("    2. Custom HTTP endpoint");
+  console.log("    3. Local keypair (direct, no external wallet)");
 
-  // Try auto-detect
-  const detected = detectVaulx();
-  if (detected) {
-    console.log(`  vaulx wallet detected (port ${detected.port})`);
-    const answer = await prompt(rl, "  Read auth token from vaulx? (y/n): ");
-    if (answer.toLowerCase() === "y") {
-      vaulxAuthToken = detected.token;
-      vaulxEndpoint = `http://127.0.0.1:${detected.port}`;
-      console.log("  Token loaded from vaulx\n");
+  const walletChoice = await prompt(rl, "\n  Select (1/2/3): ");
+
+  let walletMode: "http" | "keypair" = "http";
+  let walletEndpoint = "http://127.0.0.1:18420";
+  let walletAuthToken = "";
+  let walletPrivateKey: string | undefined;
+
+  if (walletChoice === "1") {
+    // vaulx auto-detect
+    const detected = detectVaulx();
+    if (detected) {
+      console.log(`\n  vaulx wallet detected (port ${detected.port})`);
+      const answer = await prompt(rl, "  Read auth token from vaulx? (y/n): ");
+      if (answer.toLowerCase() === "y") {
+        walletAuthToken = detected.token;
+        walletEndpoint = `http://127.0.0.1:${detected.port}`;
+        console.log("  Token loaded from vaulx\n");
+      } else {
+        walletAuthToken = await prompt(rl, "  Auth token: ");
+      }
+    } else {
+      console.log("\n  vaulx not found. Enter manually:");
+      walletEndpoint =
+        (await prompt(rl, "  vaulx endpoint (default http://127.0.0.1:18420): ")) ||
+        "http://127.0.0.1:18420";
+      walletAuthToken = await prompt(rl, "  Auth token: ");
     }
+  } else if (walletChoice === "2") {
+    // Custom HTTP endpoint
+    walletEndpoint = await prompt(rl, "\n  Wallet endpoint: ");
+    walletAuthToken = await prompt(rl, "  Auth token: ");
+  } else if (walletChoice === "3") {
+    // Local keypair
+    walletMode = "keypair";
+    walletPrivateKey = await prompt(rl, "\n  Solana private key (base64): ");
+    console.log("  Warning: Private key stored in config. Use HTTP mode for production.\n");
   }
 
-  if (!vaulxAuthToken) {
-    vaulxAuthToken = await prompt(rl, "  vaulx auth token: ");
-    const ep = await prompt(rl, "  vaulx endpoint (default http://127.0.0.1:18420): ");
-    if (ep.trim()) vaulxEndpoint = ep.trim();
-  }
-
-  const solanaRpc = await prompt(rl, "  Solana RPC (default https://api.devnet.solana.com): ")
-    || "https://api.devnet.solana.com";
-  const programId = await prompt(rl, "  Program ID (default 7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf): ")
-    || "7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf";
+  const solanaRpc =
+    (await prompt(rl, "  Solana RPC (default https://api.devnet.solana.com): ")) ||
+    "https://api.devnet.solana.com";
+  const programId =
+    (await prompt(rl, "  Program ID (default 7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf): ")) ||
+    "7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf";
 
   const config: AdMcpConfig = {
-    vaulx_endpoint: vaulxEndpoint,
-    vaulx_auth_token: vaulxAuthToken,
+    wallet_mode: walletMode,
+    wallet_endpoint: walletEndpoint,
+    wallet_auth_token: walletAuthToken,
+    ...(walletPrivateKey ? { wallet_private_key: walletPrivateKey } : {}),
     solana_rpc: solanaRpc.trim() || "https://api.devnet.solana.com",
     program_id: programId.trim() || "7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf",
     auto_sign: true,

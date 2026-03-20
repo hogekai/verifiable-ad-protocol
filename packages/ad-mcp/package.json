@@ -17,6 +17,7 @@
     "@solana/web3.js": "^1.95.0",
     "better-sqlite3": "^11.0.0",
     "bn.js": "^5.2.1",
+    "tweetnacl": "^1.0.3",
     "zod": "^3.25.0"
   },
   "devDependencies": {

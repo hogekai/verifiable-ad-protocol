@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http";
-import { VaulxClient } from "../src/vaulx-client.js";
+import { HttpWalletProvider } from "../src/wallet-provider.js";
 
 let server: Server;
 let port: number;
@@ -67,15 +67,15 @@ afterAll(() => {
   server.close();
 });
 
-describe("VaulxClient", () => {
+describe("HttpWalletProvider", () => {
   it("getAddress returns base58 pubkey", async () => {
-    const client = new VaulxClient(`http://127.0.0.1:${port}`, TEST_TOKEN);
+    const client = new HttpWalletProvider(`http://127.0.0.1:${port}`, TEST_TOKEN);
     const address = await client.getAddress();
     expect(address).toBe(TEST_ADDRESS);
   });
 
   it("signBytes returns signature and publicKey", async () => {
-    const client = new VaulxClient(`http://127.0.0.1:${port}`, TEST_TOKEN);
+    const client = new HttpWalletProvider(`http://127.0.0.1:${port}`, TEST_TOKEN);
     const msg = Buffer.from("test-message").toString("base64");
     const result = await client.signBytes(msg);
     expect(result.signature).toBeTruthy();
@@ -83,21 +83,20 @@ describe("VaulxClient", () => {
   });
 
   it("signAndSendRawTransaction returns tx signature", async () => {
-    const client = new VaulxClient(`http://127.0.0.1:${port}`, TEST_TOKEN);
+    const client = new HttpWalletProvider(`http://127.0.0.1:${port}`, TEST_TOKEN);
     const result = await client.signAndSendRawTransaction("fake-tx-base64");
     expect(result.signature).toBe("fake-tx-sig-abc123");
   });
 
   it("auth token is included in headers", async () => {
-    const client = new VaulxClient(`http://127.0.0.1:${port}`, TEST_TOKEN);
-    // signBytes requires auth — should succeed with correct token
+    const client = new HttpWalletProvider(`http://127.0.0.1:${port}`, TEST_TOKEN);
     const msg = Buffer.from("test").toString("base64");
     await expect(client.signBytes(msg)).resolves.toBeTruthy();
   });
 
   it("HTTP error throws appropriate exception", async () => {
-    const client = new VaulxClient(`http://127.0.0.1:${port}`, "wrong-token");
+    const client = new HttpWalletProvider(`http://127.0.0.1:${port}`, "wrong-token");
     const msg = Buffer.from("test").toString("base64");
-    await expect(client.signBytes(msg)).rejects.toThrow("vaulx /api/sign-bytes failed (401)");
+    await expect(client.signBytes(msg)).rejects.toThrow("Wallet /api/sign-bytes failed (401)");
   });
 });

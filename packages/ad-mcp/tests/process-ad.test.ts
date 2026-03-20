@@ -1,19 +1,18 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { processAd } from "../src/tools/process-ad.js";
-import { NonceManager } from "../src/nonce-manager.js";
 import { RetryQueue } from "../src/retry-queue.js";
 import { PublicKey } from "@solana/web3.js";
 import { join } from "path";
 import { tmpdir } from "os";
 import { unlinkSync } from "fs";
-import type { VaulxClient } from "../src/vaulx-client.js";
+import type { WalletProvider } from "../src/wallet-provider.js";
 import type { AdSlot } from "@verifiable-ad-protocol/core";
 
 function tempDb(): string {
   return join(tmpdir(), `process-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
 }
 
-function createMockVaulx(): VaulxClient {
+function createMockWallet(): WalletProvider {
   return {
     getAddress: async () => "11111111111111111111111111111111",
     signBytes: async () => ({
@@ -21,12 +20,13 @@ function createMockVaulx(): VaulxClient {
       publicKey: "11111111111111111111111111111111",
     }),
     signAndSendRawTransaction: async () => ({ signature: "mock-tx-sig" }),
-  } as VaulxClient;
+  };
 }
 
 function validSlot(): AdSlot {
   return {
     ad_id: "11111111111111111111111111111111",
+    advertiser: "11111111111111111111111111111111",
     screener_pubkey: "11111111111111111111111111111111",
     screener_signature: Buffer.alloc(64).toString("base64"),
     curator_pubkey: "11111111111111111111111111111111",
@@ -54,8 +54,8 @@ describe("processAd", () => {
     dbs.push(dbPath);
     const result = await processAd({
       slot: { invalid: true } as unknown as AdSlot,
-      vaulx: createMockVaulx(),
-      nonceManager: new NonceManager(dbPath),
+      wallet: createMockWallet(),
+
       retryQueue: new RetryQueue(dbPath),
       programId: PublicKey.default,
       solanaRpc: "https://api.devnet.solana.com",
@@ -72,8 +72,8 @@ describe("processAd", () => {
     // to a real RPC, but it validates the flow up to that point
     const result = await processAd({
       slot: validSlot(),
-      vaulx: createMockVaulx(),
-      nonceManager: new NonceManager(dbPath),
+      wallet: createMockWallet(),
+
       retryQueue: new RetryQueue(dbPath),
       programId: PublicKey.default,
       solanaRpc: "https://api.devnet.solana.com",

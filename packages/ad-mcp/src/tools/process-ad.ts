@@ -1,28 +1,41 @@
-import { PublicKey, Transaction, Connection } from "@solana/web3.js";
+import {
+  PublicKey,
+  Transaction,
+  Connection,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+  SystemProgram,
+} from "@solana/web3.js";
+import { Program, AnchorProvider } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import {
   hashImpressionMessage,
   buildEd25519VerifyInstructions,
   validateAdSlot,
+  findBitmapPda,
+  findScreenerPda,
+  findCuratorPda,
+  findDepositPda,
+  findConfigPda,
+  BITS_PER_BITMAP,
 } from "@verifiable-ad-protocol/core";
 import type { AdSlot, ImpressionMessage } from "@verifiable-ad-protocol/core";
-import type { VaulxClient } from "../vaulx-client.js";
-import type { NonceManager } from "../nonce-manager.js";
+import type { WalletProvider } from "../wallet-provider.js";
 import type { RetryQueue } from "../retry-queue.js";
+import IDL from "../idl/verifiable_ad_protocol.json" with { type: "json" };
 
 /**
- * Process an ad slot: sign + build tx + submit via vaulx.
+ * Process an ad slot: sign + build tx + submit via wallet.
  *
- * All vaulx communication is localhost HTTP. LLM is not involved.
+ * All wallet communication is localhost HTTP. LLM is not involved.
  */
 export async function processAd(params: {
   slot: AdSlot;
-  vaulx: VaulxClient;
-  nonceManager: NonceManager;
+  wallet: WalletProvider;
   retryQueue: RetryQueue;
   programId: PublicKey;
   solanaRpc: string;
 }): Promise<{ success: boolean; signature?: string; error?: string }> {
-  const { slot, vaulx, nonceManager, retryQueue, programId, solanaRpc } = params;
+  const { slot, wallet, retryQueue, programId, solanaRpc } = params;
 
   // 1. Validate
   if (!validateAdSlot(slot)) {
@@ -30,8 +43,8 @@ export async function processAd(params: {
   }
 
   try {
-    // 2. Get agent pubkey from vaulx
-    const agentAddress = await vaulx.getAddress();
+    // 2. Get agent pubkey from wallet
+    const agentAddress = await wallet.getAddress();
     const agentPubkey = new PublicKey(agentAddress);
 
     // 3. Build canonical message hash
@@ -46,9 +59,9 @@ export async function processAd(params: {
     };
     const messageHash = hashImpressionMessage(msg);
 
-    // 4. Sign via vaulx (localhost HTTP, not through LLM)
-    const { signature: agentSigBase64 } = await vaulx.signBytes(
-      messageHash.toString("base64")
+    // 4. Sign via wallet (localhost HTTP, not through LLM)
+    const { signature: agentSigBase64 } = await wallet.signBytes(
+      messageHash.toString("base64"),
     );
     const agentSignature = Buffer.from(agentSigBase64, "base64");
 
@@ -60,33 +73,104 @@ export async function processAd(params: {
       programId,
     });
 
-    // 6. Build record_impression instruction (using Anchor IDL)
-    // NOTE: This requires the Anchor-generated client.
-    // The implementation will use:
-    //   program.methods.recordImpression(nonce, contextHash, timestamp, chunkIndex, agentPubkey)
-    //     .accounts({...}).instruction()
-    // For now, this is a placeholder — the actual Anchor IDL client will be generated
-    // from the on-chain program's IDL json (target/idl/verifiable_ad_protocol.json).
+    // 6. Derive PDAs (reuse core helpers)
+    const adAccountPubkey = new PublicKey(slot.ad_id);
+    const advertiserPubkey = new PublicKey(slot.advertiser);
+    const screenerPubkey = new PublicKey(slot.screener_pubkey);
+    const curatorPubkey = new PublicKey(slot.curator_pubkey);
+    const chunkIndex = Math.floor(slot.impression_nonce / Number(BITS_PER_BITMAP));
 
-    // 7. Assemble full transaction
+    const [screenerPda] = findScreenerPda(screenerPubkey, programId);
+    const [curatorPda] = findCuratorPda(curatorPubkey, programId);
+    const [bitmapPda] = findBitmapPda(adAccountPubkey, slot.impression_nonce, programId);
+    const [depositPda] = findDepositPda(advertiserPubkey, programId);
+    const [configPda] = findConfigPda(programId);
+
+    // 6.5 Read-only Anchor provider (signing is done by wallet provider)
+    const connection = new Connection(solanaRpc);
+    const dummyWallet = {
+      publicKey: agentPubkey,
+      signTransaction: async (tx: any) => tx,
+      signAllTransactions: async (txs: any[]) => txs,
+    };
+    const idlWithAddr = { ...IDL, address: programId.toBase58() };
+    const provider = new AnchorProvider(connection, dummyWallet as any, {
+      commitment: "confirmed",
+    });
+    const program = new Program(idlWithAddr as any, provider);
+
+    // 7. Bitmap initialization check (separate tx if needed)
+    const bitmapAccountInfo = await connection.getAccountInfo(bitmapPda);
+    if (!bitmapAccountInfo) {
+      const initBitmapIx = await (program.methods as any)
+        .initializeBitmap(chunkIndex)
+        .accounts({
+          adAccount: adAccountPubkey,
+          impressionBitmap: bitmapPda,
+          payer: agentPubkey,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction();
+
+      const initTx = new Transaction();
+      initTx.add(initBitmapIx);
+      initTx.feePayer = agentPubkey;
+      initTx.recentBlockhash = PublicKey.default.toBase58();
+
+      const initTxBase64 = initTx
+        .serialize({ requireAllSignatures: false, verifySignatures: false })
+        .toString("base64");
+      await wallet.signAndSendRawTransaction(initTxBase64);
+    }
+
+    // 8. Fetch treasury from on-chain ProtocolConfig
+    const configAccount = await (program.account as any).protocolConfig.fetch(configPda);
+    const treasury = configAccount.treasury as PublicKey;
+
+    // 9. Build record_impression instruction
+    const recordIx = await (program.methods as any)
+      .recordImpression(
+        new BN(slot.impression_nonce),
+        Array.from(Buffer.from(slot.context_hash, "hex")),
+        new BN(slot.timestamp),
+        chunkIndex,
+        agentPubkey,
+      )
+      .accounts({
+        adAccount: adAccountPubkey,
+        screenerAccount: screenerPda,
+        curatorAccount: curatorPda,
+        impressionBitmap: bitmapPda,
+        depositAccount: depositPda,
+        protocolConfig: configPda,
+        screenerWallet: screenerPubkey,
+        curatorWallet: curatorPubkey,
+        protocolTreasury: treasury,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentPubkey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    // 10. Assemble full transaction
     const tx = new Transaction();
     for (const ix of ed25519Ixs) tx.add(ix);
-    // tx.add(recordImpressionIx);  // Add after Anchor IDL integration
+    tx.add(recordIx);
+    tx.feePayer = agentPubkey;
+    // Dummy blockhash — wallet provider overwrites with fresh one
+    tx.recentBlockhash = PublicKey.default.toBase58();
 
-    // 8. Serialize and submit via vaulx
-    const connection = new Connection(solanaRpc);
-    const { blockhash } = await connection.getLatestBlockhash();
-    tx.recentBlockhash = blockhash;
-    // feePayer will be set by vaulx
-
-    const txBase64 = tx.serialize({ requireAllSignatures: false }).toString("base64");
-    const { signature: txSig } = await vaulx.signAndSendRawTransaction(txBase64);
+    // 11. Serialize and submit via wallet
+    const txBase64 = tx
+      .serialize({ requireAllSignatures: false, verifySignatures: false })
+      .toString("base64");
+    const { signature: txSig } = await wallet.signAndSendRawTransaction(txBase64);
 
     return { success: true, signature: txSig };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
 
-    // TODO: Add to retry queue when tx serialization is available
+    // TODO: Add to retry queue when retry logic is implemented
     // retryQueue.add(txBase64, slot.ad_id, slot.impression_nonce);
 
     return { success: false, error: errMsg };
