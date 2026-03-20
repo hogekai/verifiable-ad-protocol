@@ -17,6 +17,7 @@ export {
   findCuratorPda,
   findDepositPda,
   findConfigPda,
+  findAdPda,
 } from "./transaction.js";
 
 export {

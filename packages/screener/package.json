@@ -1,0 +1,23 @@
+{
+  "name": "@verifiable-ad-protocol/screener",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@verifiable-ad-protocol/core": "0.1.0",
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/web3.js": "^1.95.0",
+    "better-sqlite3": "^11.0.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "vitest": "^1.0.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -83,3 +83,12 @@ export function findConfigPda(programId?: PublicKey) {
     [Buffer.from("config")], programId ?? PROGRAM_ID,
   );
 }
+
+export function findAdPda(advertiser: PublicKey, adIndex: number, programId?: PublicKey) {
+  const pid = programId ?? PROGRAM_ID;
+  const indexBytes = Buffer.alloc(8);
+  indexBytes.writeBigUInt64LE(BigInt(adIndex));
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("ad"), advertiser.toBuffer(), indexBytes], pid,
+  );
+}

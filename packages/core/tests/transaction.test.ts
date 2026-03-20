@@ -7,6 +7,7 @@ import {
   findCuratorPda,
   findDepositPda,
   findConfigPda,
+  findAdPda,
 } from "../src/transaction.js";
 import { PROGRAM_ID } from "../src/constants.js";
 import type { AdSlot } from "../src/types.js";
@@ -140,5 +141,24 @@ describe("PDA helpers", () => {
       [Buffer.from("config")], PROGRAM_ID,
     );
     expect(pda.equals(expected)).toBe(true);
+  });
+
+  it("findAdPda uses correct seeds", () => {
+    const key = PublicKey.default;
+    const adIndex = 0;
+    const [pda] = findAdPda(key, adIndex);
+    const indexBytes = Buffer.alloc(8);
+    indexBytes.writeBigUInt64LE(BigInt(adIndex));
+    const [expected] = PublicKey.findProgramAddressSync(
+      [Buffer.from("ad"), key.toBuffer(), indexBytes], PROGRAM_ID,
+    );
+    expect(pda.equals(expected)).toBe(true);
+  });
+
+  it("findAdPda returns different PDA for different ad indices", () => {
+    const key = PublicKey.default;
+    const [pda0] = findAdPda(key, 0);
+    const [pda1] = findAdPda(key, 1);
+    expect(pda0.equals(pda1)).toBe(false);
   });
 });

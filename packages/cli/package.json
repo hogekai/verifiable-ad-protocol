@@ -1,0 +1,22 @@
+{
+  "name": "@verifiable-ad-protocol/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "ad-protocol": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@verifiable-ad-protocol/core": "0.1.0",
+    "@verifiable-ad-protocol/screener": "0.1.0",
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/web3.js": "^1.95.0",
+    "commander": "^12.0.0",
+    "bn.js": "^5.2.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

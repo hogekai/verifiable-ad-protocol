@@ -7,6 +7,9 @@ skip-lint = false
 [programs.localnet]
 verifiable_ad_protocol = "7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf"
 
+[programs.devnet]
+verifiable_ad_protocol = "7Qu5B4tB23Gt4WDZoZiLJpQ8hSxK6RPXeFSCdacCPvFf"
+
 [registry]
 url = "https://api.apr.dev"
 
