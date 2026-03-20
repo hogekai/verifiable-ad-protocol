@@ -108,3 +108,16 @@ pub struct ImpressionBitmap {
 
 // space = 8 + 32 + 2 + 1024 + 1 = 1067
 pub const IMPRESSION_BITMAP_SPACE: usize = 1067;
+
+/// Canonical message signed by all 3 parties (not an on-chain account).
+/// Borsh serialized = 176 bytes fixed.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct ImpressionMessage {
+    pub ad_id: Pubkey,
+    pub screener: Pubkey,
+    pub curator: Pubkey,
+    pub agent: Pubkey,
+    pub impression_nonce: u64,
+    pub context_hash: [u8; 32],
+    pub timestamp: i64,
+}

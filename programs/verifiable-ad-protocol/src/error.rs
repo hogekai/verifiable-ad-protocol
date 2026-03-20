@@ -31,4 +31,44 @@ pub enum ProtocolError {
 
     #[msg("Account is not active")]
     InactiveAccount,
+
+    // Sub-phase 2: Ed25519 signature verification & record_impression
+    #[msg("Invalid Ed25519 instruction")]
+    InvalidEd25519Instruction,
+
+    #[msg("Signature verification failed")]
+    SignatureVerificationFailed,
+
+    #[msg("Screener is not authorized for this ad")]
+    UnauthorizedScreener,
+
+    #[msg("Curator is not endorsed by this screener")]
+    UnauthorizedCurator,
+
+    #[msg("Curator is excluded by this ad")]
+    ExcludedCurator,
+
+    #[msg("Agent cannot be the same as screener or curator")]
+    AgentIsScreenerOrCurator,
+
+    #[msg("Screener declared share exceeds ad max")]
+    ExceededScreenerShare,
+
+    #[msg("Insufficient ad budget")]
+    InsufficientBudget,
+
+    #[msg("Insufficient deposit balance")]
+    InsufficientDeposit,
+
+    #[msg("Timestamp is too old (more than 5 minutes)")]
+    TimestampTooOld,
+
+    #[msg("Timestamp is in the future (more than 1 minute)")]
+    TimestampInFuture,
+
+    #[msg("Bitmap chunk index mismatch")]
+    BitmapChunkMismatch,
+
+    #[msg("Ad is not active")]
+    AdNotActive,
 }

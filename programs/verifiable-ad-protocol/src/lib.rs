@@ -1,12 +1,16 @@
 pub mod bitmap;
 pub mod constants;
+pub mod ed25519;
 pub mod error;
 pub mod state;
 
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+use anchor_lang::solana_program::sysvar::instructions as instructions_sysvar_mod;
 
+use bitmap::{check_and_set_bit, get_chunk_index};
 use constants::*;
+use ed25519::verify_ed25519_instruction;
 use error::ProtocolError;
 use state::*;
 
@@ -209,6 +213,189 @@ pub mod verifiable_ad_protocol {
         curator.metadata_uri = metadata_uri;
         Ok(())
     }
+
+    pub fn initialize_bitmap(
+        ctx: Context<InitializeBitmap>,
+        chunk_index: u16,
+    ) -> Result<()> {
+        let bitmap = &mut ctx.accounts.impression_bitmap;
+        bitmap.ad_id = ctx.accounts.ad_account.key();
+        bitmap.chunk_index = chunk_index;
+        bitmap.bump = ctx.bumps.impression_bitmap;
+        Ok(())
+    }
+
+    pub fn record_impression(
+        ctx: Context<RecordImpression>,
+        impression_nonce: u64,
+        context_hash: [u8; 32],
+        timestamp: i64,
+        chunk_index: u16,
+    ) -> Result<()> {
+        let ad = &ctx.accounts.ad_account;
+        let screener = &ctx.accounts.screener_account;
+        let curator_acc = &ctx.accounts.curator_account;
+        let agent_reg = &ctx.accounts.agent_registry;
+
+        // ── 0. Basic checks ──────────────────────────────────────────
+        require!(ad.is_active, ProtocolError::AdNotActive);
+
+        let now = Clock::get()?.unix_timestamp;
+        require!(
+            now - timestamp <= MAX_TIMESTAMP_AGE_SECONDS,
+            ProtocolError::TimestampTooOld
+        );
+        require!(
+            timestamp - now <= MAX_TIMESTAMP_FUTURE_SECONDS,
+            ProtocolError::TimestampInFuture
+        );
+
+        // ── 1. Authorization checks ──────────────────────────────────
+        require!(
+            ad.authorized_screeners.contains(&screener.screener),
+            ProtocolError::UnauthorizedScreener
+        );
+        require!(
+            screener.endorsed_curators.contains(&curator_acc.curator),
+            ProtocolError::UnauthorizedCurator
+        );
+        require!(
+            !ad.excluded_curators.contains(&curator_acc.curator),
+            ProtocolError::ExcludedCurator
+        );
+        require!(
+            agent_reg.agent != screener.screener && agent_reg.agent != curator_acc.curator,
+            ProtocolError::AgentIsScreenerOrCurator
+        );
+        require!(
+            screener.declared_share_bps <= ad.max_screener_share_bps,
+            ProtocolError::ExceededScreenerShare
+        );
+
+        // ── 2. Build canonical message and verify Ed25519 signatures ─
+        let message = ImpressionMessage {
+            ad_id: ctx.accounts.ad_account.key(),
+            screener: screener.screener,
+            curator: curator_acc.curator,
+            agent: agent_reg.agent,
+            impression_nonce,
+            context_hash,
+            timestamp,
+        };
+        let message_bytes = message
+            .try_to_vec()
+            .map_err(|_| ProtocolError::ArithmeticOverflow)?;
+
+        // Sign the SHA-256 hash of the canonical message (32 bytes) instead of
+        // the full message (176 bytes) to fit 3 Ed25519 ixs within tx size limit.
+        let message_hash = anchor_lang::solana_program::hash::hash(&message_bytes);
+
+        let instructions_sysvar = &ctx.accounts.instructions_sysvar;
+
+        verify_ed25519_instruction(instructions_sysvar, 0, &screener.screener, message_hash.as_ref())?;
+        verify_ed25519_instruction(instructions_sysvar, 1, &curator_acc.curator, message_hash.as_ref())?;
+        verify_ed25519_instruction(instructions_sysvar, 2, &agent_reg.agent, message_hash.as_ref())?;
+
+        // ── 3. Bitmap deduplication ──────────────────────────────────
+        let expected_chunk = get_chunk_index(impression_nonce);
+        require!(chunk_index == expected_chunk, ProtocolError::BitmapChunkMismatch);
+
+        let bitmap = &mut ctx.accounts.impression_bitmap;
+        require!(
+            bitmap.chunk_index == chunk_index,
+            ProtocolError::BitmapChunkMismatch
+        );
+        check_and_set_bit(&mut bitmap.bitmap, impression_nonce)?;
+
+        // ── 4. Reward calculation ────────────────────────────────────
+        let protocol_fee_bps = ctx.accounts.protocol_config.protocol_fee_bps as u64;
+        let declared_share_bps = screener.declared_share_bps as u64;
+
+        let per_impression = ad
+            .max_cpm_lamports
+            .checked_div(1000)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        let protocol_fee = per_impression
+            .checked_mul(protocol_fee_bps)
+            .ok_or(ProtocolError::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        let after_fee = per_impression
+            .checked_sub(protocol_fee)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        let screener_reward = after_fee
+            .checked_mul(declared_share_bps)
+            .ok_or(ProtocolError::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        let curator_reward = after_fee
+            .checked_sub(screener_reward)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        // ── 5. Budget & deposit checks ───────────────────────────────
+        let new_spent = ad
+            .spent_lamports
+            .checked_add(per_impression)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+        require!(new_spent <= ad.budget_lamports, ProtocolError::InsufficientBudget);
+
+        let deposit_lamports = ctx.accounts.deposit_account.to_account_info().lamports();
+        let rent = Rent::get()?;
+        let deposit_rent_exempt = rent.minimum_balance(DEPOSIT_ACCOUNT_SPACE);
+        let available = deposit_lamports
+            .checked_sub(deposit_rent_exempt)
+            .ok_or(ProtocolError::InsufficientDeposit)?;
+        require!(available >= per_impression, ProtocolError::InsufficientDeposit);
+
+        // ── 6. SOL transfers (lamports direct manipulation) ──────────
+        if screener_reward > 0 {
+            **ctx.accounts.deposit_account.to_account_info().try_borrow_mut_lamports()? -=
+                screener_reward;
+            **ctx.accounts.screener_wallet.to_account_info().try_borrow_mut_lamports()? +=
+                screener_reward;
+        }
+        if curator_reward > 0 {
+            **ctx.accounts.deposit_account.to_account_info().try_borrow_mut_lamports()? -=
+                curator_reward;
+            **ctx.accounts.curator_wallet.to_account_info().try_borrow_mut_lamports()? +=
+                curator_reward;
+        }
+        if protocol_fee > 0 {
+            **ctx.accounts.deposit_account.to_account_info().try_borrow_mut_lamports()? -=
+                protocol_fee;
+            **ctx
+                .accounts
+                .protocol_treasury
+                .to_account_info()
+                .try_borrow_mut_lamports()? += protocol_fee;
+        }
+
+        // ── 7. State updates ─────────────────────────────────────────
+        let ad = &mut ctx.accounts.ad_account;
+        ad.spent_lamports = new_spent;
+        ad.total_impressions = ad
+            .total_impressions
+            .checked_add(1)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        let curator_mut = &mut ctx.accounts.curator_account;
+        curator_mut.total_verified_impressions = curator_mut
+            .total_verified_impressions
+            .checked_add(1)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        let screener_mut = &mut ctx.accounts.screener_account;
+        screener_mut.total_screened = screener_mut
+            .total_screened
+            .checked_add(1)
+            .ok_or(ProtocolError::ArithmeticOverflow)?;
+
+        Ok(())
+    }
 }
 
 // ─── Accounts Contexts ─────────────────────────────────────────────────────
@@ -353,4 +540,98 @@ pub struct UpdateCurator<'info> {
         bump = curator_account.bump
     )]
     pub curator_account: Account<'info, CuratorAccount>,
+}
+
+#[derive(Accounts)]
+#[instruction(_impression_nonce: u64, _context_hash: [u8; 32], _timestamp: i64, chunk_index: u16)]
+pub struct RecordImpression<'info> {
+    #[account(
+        mut,
+        seeds = [b"ad", ad_account.advertiser.as_ref(), &ad_account.ad_index.to_le_bytes()],
+        bump = ad_account.bump
+    )]
+    pub ad_account: Box<Account<'info, AdAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"screener", screener_account.screener.as_ref()],
+        bump = screener_account.bump
+    )]
+    pub screener_account: Box<Account<'info, ScreenerAccount>>,
+
+    #[account(
+        mut,
+        seeds = [b"curator", curator_account.curator.as_ref()],
+        bump = curator_account.bump
+    )]
+    pub curator_account: Box<Account<'info, CuratorAccount>>,
+
+    #[account(
+        seeds = [b"agent", agent_registry.agent.as_ref()],
+        bump = agent_registry.bump
+    )]
+    pub agent_registry: Box<Account<'info, AgentRegistry>>,
+
+    #[account(
+        mut,
+        seeds = [b"bitmap", ad_account.key().as_ref(), &chunk_index.to_le_bytes()],
+        bump = impression_bitmap.bump
+    )]
+    pub impression_bitmap: Box<Account<'info, ImpressionBitmap>>,
+
+    #[account(
+        mut,
+        seeds = [b"deposit", ad_account.advertiser.as_ref()],
+        bump = deposit_account.bump
+    )]
+    pub deposit_account: Box<Account<'info, DepositAccount>>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
+    /// CHECK: Screener reward destination wallet.
+    #[account(mut)]
+    pub screener_wallet: UncheckedAccount<'info>,
+
+    /// CHECK: Curator reward destination wallet.
+    #[account(mut)]
+    pub curator_wallet: UncheckedAccount<'info>,
+
+    /// CHECK: Protocol treasury. Validated by constraint.
+    #[account(
+        mut,
+        constraint = protocol_treasury.key() == protocol_config.treasury @ ProtocolError::Unauthorized
+    )]
+    pub protocol_treasury: UncheckedAccount<'info>,
+
+    /// CHECK: Instructions sysvar for Ed25519 signature verification.
+    #[account(address = instructions_sysvar_mod::ID)]
+    pub instructions_sysvar: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(chunk_index: u16)]
+pub struct InitializeBitmap<'info> {
+    #[account(
+        seeds = [b"ad", ad_account.advertiser.as_ref(), &ad_account.ad_index.to_le_bytes()],
+        bump = ad_account.bump
+    )]
+    pub ad_account: Account<'info, AdAccount>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = IMPRESSION_BITMAP_SPACE,
+        seeds = [b"bitmap", ad_account.key().as_ref(), &chunk_index.to_le_bytes()],
+        bump
+    )]
+    pub impression_bitmap: Box<Account<'info, ImpressionBitmap>>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
 }

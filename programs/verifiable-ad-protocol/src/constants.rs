@@ -15,3 +15,7 @@ pub const DEFAULT_RATE_LIMIT_WINDOW_SLOTS: u64 = 150; // ~1 minute
 pub const DEFAULT_RATE_LIMIT_MAX_PER_WINDOW: u32 = 100;
 pub const DEFAULT_MAX_IMPRESSIONS_PER_HOUR: u32 = 10_000;
 pub const SLOTS_PER_HOUR: u64 = 9000; // slot time ~400ms
+
+// Timestamp freshness
+pub const MAX_TIMESTAMP_AGE_SECONDS: i64 = 300; // 5 minutes
+pub const MAX_TIMESTAMP_FUTURE_SECONDS: i64 = 60; // 1 minute

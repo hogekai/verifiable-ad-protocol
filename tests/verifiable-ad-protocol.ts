@@ -2,8 +2,16 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { VerifiableAdProtocol } from "../target/types/verifiable_ad_protocol";
 import { expect } from "chai";
-import { PublicKey, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import {
+  PublicKey,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  Ed25519Program,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
 import BN from "bn.js";
+import { createHash } from "crypto";
 
 describe("verifiable-ad-protocol", () => {
   const provider = anchor.AnchorProvider.env();
@@ -71,6 +79,7 @@ describe("verifiable-ad-protocol", () => {
       airdrop(screener.publicKey),
       airdrop(curator.publicKey),
       airdrop(agent.publicKey),
+      airdrop(treasury.publicKey),
     ]);
   });
 
@@ -599,6 +608,516 @@ describe("verifiable-ad-protocol", () => {
       expect(curatorAccount.metadataUri).to.equal(
         "https://example.com/updated-meta.json"
       );
+    });
+  });
+
+  // ─── 10. record_impression (Sub-phase 2) ──────────────────────────────────
+
+  describe("record_impression", () => {
+    const BITS_PER_BITMAP = 8192;
+
+    const findBitmapPda = (adKey: PublicKey, nonce: number) => {
+      const chunkIndex = Math.floor(nonce / BITS_PER_BITMAP);
+      const chunkBytes = Buffer.alloc(2);
+      chunkBytes.writeUInt16LE(chunkIndex);
+      return PublicKey.findProgramAddressSync(
+        [Buffer.from("bitmap"), adKey.toBuffer(), chunkBytes],
+        program.programId
+      );
+    };
+
+    function buildCanonicalMessage(
+      adId: PublicKey,
+      screenerKey: PublicKey,
+      curatorKey: PublicKey,
+      agentKey: PublicKey,
+      impressionNonce: BN,
+      contextHash: Buffer,
+      timestamp: BN
+    ): Buffer {
+      return Buffer.concat([
+        adId.toBuffer(),
+        screenerKey.toBuffer(),
+        curatorKey.toBuffer(),
+        agentKey.toBuffer(),
+        impressionNonce.toArrayLike(Buffer, "le", 8),
+        contextHash,
+        timestamp.toArrayLike(Buffer, "le", 8),
+      ]);
+    }
+
+    function createEd25519Ix(secretKey: Uint8Array, message: Buffer) {
+      // Sign the SHA-256 hash of the message (matches Rust side)
+      const messageHash = createHash("sha256").update(message).digest();
+      return Ed25519Program.createInstructionWithPrivateKey({
+        privateKey: secretKey,
+        message: Uint8Array.from(messageHash),
+      });
+    }
+
+    // Restore screener's endorsed_curators (cleared by update_screener test)
+    // and reset ad to known state for impression tests
+    before(async () => {
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      await program.methods
+        .updateScreener(1500, [curator.publicKey])
+        .accounts({
+          screener: screener.publicKey,
+          screenerAccount: screenerPda,
+        })
+        .signers([screener])
+        .rpc();
+
+      // Reset ad: max_cpm=10M, max_screener_share=2000, active, screener authorized
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+      await program.methods
+        .updateAd(
+          new BN(10_000_000),
+          2000,
+          [screener.publicKey],
+          [],
+          true
+        )
+        .accounts({
+          advertiser: advertiser.publicKey,
+          adAccount: adPda,
+        })
+        .signers([advertiser])
+        .rpc();
+    });
+
+    it("initializes bitmap for chunk 0", async () => {
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+      const [bitmapPda] = findBitmapPda(adPda, 0);
+
+      await program.methods
+        .initializeBitmap(0)
+        .accounts({
+          adAccount: adPda,
+          impressionBitmap: bitmapPda,
+          payer: advertiser.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([advertiser])
+        .rpc();
+
+      const bitmap = await program.account.impressionBitmap.fetch(bitmapPda);
+      expect(bitmap.adId.toString()).to.equal(adPda.toString());
+      expect(bitmap.chunkIndex).to.equal(0);
+    });
+
+    it("records impression successfully with correct reward distribution", async () => {
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [agentPda] = findAgentPda(agent.publicKey);
+      const [bitmapPda] = findBitmapPda(adPda, 0);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      const nonce = new BN(0);
+      const contextHash = Buffer.alloc(32, 0xab);
+      const timestamp = new BN(Math.floor(Date.now() / 1000));
+      const chunkIndex = 0;
+
+      const message = buildCanonicalMessage(
+        adPda, screener.publicKey, curator.publicKey, agent.publicKey,
+        nonce, contextHash, timestamp
+      );
+
+      // Get balances before
+      const screenerBalBefore = await provider.connection.getBalance(screener.publicKey);
+      const curatorBalBefore = await provider.connection.getBalance(curator.publicKey);
+      const treasuryBalBefore = await provider.connection.getBalance(treasury.publicKey);
+      const depositBalBefore = await provider.connection.getBalance(depositPda);
+
+      const ix0 = createEd25519Ix(screener.secretKey, message);
+      const ix1 = createEd25519Ix(curator.secretKey, message);
+      const ix2 = createEd25519Ix(agent.secretKey, message);
+
+      const ix3 = await program.methods
+        .recordImpression(nonce, Array.from(contextHash), timestamp, chunkIndex)
+        .accounts({
+          adAccount: adPda,
+          screenerAccount: screenerPda,
+          curatorAccount: curatorPda,
+          agentRegistry: agentPda,
+          impressionBitmap: bitmapPda,
+          depositAccount: depositPda,
+          protocolConfig: configPda,
+          screenerWallet: screener.publicKey,
+          curatorWallet: curator.publicKey,
+          protocolTreasury: treasury.publicKey,
+          instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        .instruction();
+
+      const tx = new Transaction().add(ix0, ix1, ix2, ix3);
+      await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+
+      // Verify reward distribution
+      // per_impression = 10_000_000 / 1000 = 10_000
+      // protocol_fee = 10_000 * 50 / 10000 = 50
+      // after_fee = 9_950
+      // screener_reward = 9_950 * 1500 / 10000 = 1_492
+      // curator_reward = 9_950 - 1_492 = 8_458
+      const perImpression = 10_000;
+      const protocolFee = 50;
+      const screenerReward = 1_492;
+      const curatorReward = 8_458;
+
+      const screenerBalAfter = await provider.connection.getBalance(screener.publicKey);
+      const curatorBalAfter = await provider.connection.getBalance(curator.publicKey);
+      const treasuryBalAfter = await provider.connection.getBalance(treasury.publicKey);
+      const depositBalAfter = await provider.connection.getBalance(depositPda);
+
+      expect(screenerBalAfter - screenerBalBefore).to.equal(screenerReward);
+      expect(curatorBalAfter - curatorBalBefore).to.equal(curatorReward);
+      expect(treasuryBalAfter - treasuryBalBefore).to.equal(protocolFee);
+      expect(depositBalBefore - depositBalAfter).to.equal(perImpression);
+
+      // Verify state updates
+      const ad = await program.account.adAccount.fetch(adPda);
+      expect(ad.spentLamports.toNumber()).to.equal(perImpression);
+      expect(ad.totalImpressions.toNumber()).to.equal(1);
+
+      const curatorAcc = await program.account.curatorAccount.fetch(curatorPda);
+      expect(curatorAcc.totalVerifiedImpressions.toNumber()).to.equal(1);
+
+      const screenerAcc = await program.account.screenerAccount.fetch(screenerPda);
+      expect(screenerAcc.totalScreened.toNumber()).to.equal(1);
+    });
+
+    it("fails with duplicate nonce", async () => {
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [agentPda] = findAgentPda(agent.publicKey);
+      const [bitmapPda] = findBitmapPda(adPda, 0);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      const nonce = new BN(0); // same as before
+      const contextHash = Buffer.alloc(32, 0xab);
+      const timestamp = new BN(Math.floor(Date.now() / 1000));
+
+      const message = buildCanonicalMessage(
+        adPda, screener.publicKey, curator.publicKey, agent.publicKey,
+        nonce, contextHash, timestamp
+      );
+
+      const tx = new Transaction().add(
+        createEd25519Ix(screener.secretKey, message),
+        createEd25519Ix(curator.secretKey, message),
+        createEd25519Ix(agent.secretKey, message),
+        await program.methods
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .accounts({
+            adAccount: adPda,
+            screenerAccount: screenerPda,
+            curatorAccount: curatorPda,
+            agentRegistry: agentPda,
+            impressionBitmap: bitmapPda,
+            depositAccount: depositPda,
+            protocolConfig: configPda,
+            screenerWallet: screener.publicKey,
+            curatorWallet: curator.publicKey,
+            protocolTreasury: treasury.publicKey,
+            instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          })
+          .instruction()
+      );
+
+      try {
+        await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.toString()).to.include("DuplicateImpression");
+      }
+    });
+
+    it("succeeds with different nonce (second impression)", async () => {
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [agentPda] = findAgentPda(agent.publicKey);
+      const [bitmapPda] = findBitmapPda(adPda, 1);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      const nonce = new BN(1);
+      const contextHash = Buffer.alloc(32, 0xcd);
+      const timestamp = new BN(Math.floor(Date.now() / 1000));
+
+      const message = buildCanonicalMessage(
+        adPda, screener.publicKey, curator.publicKey, agent.publicKey,
+        nonce, contextHash, timestamp
+      );
+
+      const tx = new Transaction().add(
+        createEd25519Ix(screener.secretKey, message),
+        createEd25519Ix(curator.secretKey, message),
+        createEd25519Ix(agent.secretKey, message),
+        await program.methods
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .accounts({
+            adAccount: adPda,
+            screenerAccount: screenerPda,
+            curatorAccount: curatorPda,
+            agentRegistry: agentPda,
+            impressionBitmap: bitmapPda,
+            depositAccount: depositPda,
+            protocolConfig: configPda,
+            screenerWallet: screener.publicKey,
+            curatorWallet: curator.publicKey,
+            protocolTreasury: treasury.publicKey,
+            instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          })
+          .instruction()
+      );
+
+      await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+
+      const ad = await program.account.adAccount.fetch(adPda);
+      expect(ad.totalImpressions.toNumber()).to.equal(2);
+      expect(ad.spentLamports.toNumber()).to.equal(20_000);
+    });
+
+    it("fails with unauthorized screener", async () => {
+      const fakeScreener = Keypair.generate();
+      await airdrop(fakeScreener.publicKey);
+
+      // Register fake screener
+      const [fakeScreenerPda] = findScreenerPda(fakeScreener.publicKey);
+      await program.methods
+        .registerScreener(1500, [curator.publicKey])
+        .accounts({
+          screener: fakeScreener.publicKey,
+          screenerAccount: fakeScreenerPda,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([fakeScreener])
+        .rpc();
+
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [agentPda] = findAgentPda(agent.publicKey);
+      const [bitmapPda] = findBitmapPda(adPda, 2);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      const nonce = new BN(2);
+      const contextHash = Buffer.alloc(32, 0);
+      const timestamp = new BN(Math.floor(Date.now() / 1000));
+
+      const message = buildCanonicalMessage(
+        adPda, fakeScreener.publicKey, curator.publicKey, agent.publicKey,
+        nonce, contextHash, timestamp
+      );
+
+      const tx = new Transaction().add(
+        createEd25519Ix(fakeScreener.secretKey, message),
+        createEd25519Ix(curator.secretKey, message),
+        createEd25519Ix(agent.secretKey, message),
+        await program.methods
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .accounts({
+            adAccount: adPda,
+            screenerAccount: fakeScreenerPda,
+            curatorAccount: curatorPda,
+            agentRegistry: agentPda,
+            impressionBitmap: bitmapPda,
+            depositAccount: depositPda,
+            protocolConfig: configPda,
+            screenerWallet: fakeScreener.publicKey,
+            curatorWallet: curator.publicKey,
+            protocolTreasury: treasury.publicKey,
+            instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          })
+          .instruction()
+      );
+
+      try {
+        await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.toString()).to.include("UnauthorizedScreener");
+      }
+    });
+
+    it("fails when ad is not active", async () => {
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+
+      // Deactivate ad
+      await program.methods
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], false)
+        .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
+        .signers([advertiser])
+        .rpc();
+
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [agentPda] = findAgentPda(agent.publicKey);
+      const [bitmapPda] = findBitmapPda(adPda, 3);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      const nonce = new BN(3);
+      const contextHash = Buffer.alloc(32, 0);
+      const timestamp = new BN(Math.floor(Date.now() / 1000));
+
+      const message = buildCanonicalMessage(
+        adPda, screener.publicKey, curator.publicKey, agent.publicKey,
+        nonce, contextHash, timestamp
+      );
+
+      const tx = new Transaction().add(
+        createEd25519Ix(screener.secretKey, message),
+        createEd25519Ix(curator.secretKey, message),
+        createEd25519Ix(agent.secretKey, message),
+        await program.methods
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .accounts({
+            adAccount: adPda,
+            screenerAccount: screenerPda,
+            curatorAccount: curatorPda,
+            agentRegistry: agentPda,
+            impressionBitmap: bitmapPda,
+            depositAccount: depositPda,
+            protocolConfig: configPda,
+            screenerWallet: screener.publicKey,
+            curatorWallet: curator.publicKey,
+            protocolTreasury: treasury.publicKey,
+            instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          })
+          .instruction()
+      );
+
+      try {
+        await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.toString()).to.include("AdNotActive");
+      }
+
+      // Re-activate ad for subsequent tests
+      await program.methods
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], true)
+        .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
+        .signers([advertiser])
+        .rpc();
+    });
+
+    it("fails with excluded curator", async () => {
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+
+      // Add curator to excluded list
+      await program.methods
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [curator.publicKey], true)
+        .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
+        .signers([advertiser])
+        .rpc();
+
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [agentPda] = findAgentPda(agent.publicKey);
+      const [bitmapPda] = findBitmapPda(adPda, 4);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      const nonce = new BN(4);
+      const contextHash = Buffer.alloc(32, 0);
+      const timestamp = new BN(Math.floor(Date.now() / 1000));
+
+      const message = buildCanonicalMessage(
+        adPda, screener.publicKey, curator.publicKey, agent.publicKey,
+        nonce, contextHash, timestamp
+      );
+
+      const tx = new Transaction().add(
+        createEd25519Ix(screener.secretKey, message),
+        createEd25519Ix(curator.secretKey, message),
+        createEd25519Ix(agent.secretKey, message),
+        await program.methods
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .accounts({
+            adAccount: adPda,
+            screenerAccount: screenerPda,
+            curatorAccount: curatorPda,
+            agentRegistry: agentPda,
+            impressionBitmap: bitmapPda,
+            depositAccount: depositPda,
+            protocolConfig: configPda,
+            screenerWallet: screener.publicKey,
+            curatorWallet: curator.publicKey,
+            protocolTreasury: treasury.publicKey,
+            instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          })
+          .instruction()
+      );
+
+      try {
+        await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.toString()).to.include("ExcludedCurator");
+      }
+
+      // Remove curator from excluded list
+      await program.methods
+        .updateAd(new BN(10_000_000), 2000, [screener.publicKey], [], true)
+        .accounts({ advertiser: advertiser.publicKey, adAccount: adPda })
+        .signers([advertiser])
+        .rpc();
+    });
+
+    it("fails with wrong signature (signer mismatch)", async () => {
+      const [adPda] = findAdPda(advertiser.publicKey, 0);
+      const [screenerPda] = findScreenerPda(screener.publicKey);
+      const [curatorPda] = findCuratorPda(curator.publicKey);
+      const [agentPda] = findAgentPda(agent.publicKey);
+      const [bitmapPda] = findBitmapPda(adPda, 5);
+      const [depositPda] = findDepositPda(advertiser.publicKey);
+      const [configPda] = findConfigPda();
+
+      const nonce = new BN(5);
+      const contextHash = Buffer.alloc(32, 0);
+      const timestamp = new BN(Math.floor(Date.now() / 1000));
+
+      const message = buildCanonicalMessage(
+        adPda, screener.publicKey, curator.publicKey, agent.publicKey,
+        nonce, contextHash, timestamp
+      );
+
+      // Sign with wrong key for screener (use agent's key instead)
+      const tx = new Transaction().add(
+        createEd25519Ix(agent.secretKey, message), // wrong signer!
+        createEd25519Ix(curator.secretKey, message),
+        createEd25519Ix(agent.secretKey, message),
+        await program.methods
+          .recordImpression(nonce, Array.from(contextHash), timestamp, 0)
+          .accounts({
+            adAccount: adPda,
+            screenerAccount: screenerPda,
+            curatorAccount: curatorPda,
+            agentRegistry: agentPda,
+            impressionBitmap: bitmapPda,
+            depositAccount: depositPda,
+            protocolConfig: configPda,
+            screenerWallet: screener.publicKey,
+            curatorWallet: curator.publicKey,
+            protocolTreasury: treasury.publicKey,
+            instructionsSysvar: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
+          })
+          .instruction()
+      );
+
+      try {
+        await sendAndConfirmTransaction(provider.connection, tx, [(provider.wallet as any).payer]);
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.toString()).to.include("SignatureVerificationFailed");
+      }
     });
   });
 });
