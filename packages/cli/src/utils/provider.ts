@@ -1,7 +1,6 @@
 import { Connection, Keypair } from "@solana/web3.js";
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
-import IDL from "../idl/verifiable_ad_protocol.json" with { type: "json" };
-import { PROGRAM_ID } from "@verifiable-ad-protocol/core";
+import { PROGRAM_ID, IDL } from "@verifiable-ad-protocol/core";
 import { loadKeypairFromFile } from "./keypair.js";
 
 export function createProvider(

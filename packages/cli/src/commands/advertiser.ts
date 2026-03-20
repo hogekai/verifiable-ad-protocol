@@ -11,15 +11,16 @@ export function registerAdvertiserCommands(parent: Command) {
   cmd
     .command("deposit")
     .description("Deposit SOL to advertiser pool")
-    .requiredOption("--amount <lamports>", "Amount in lamports")
+    .requiredOption("--amount <sol>", "Amount in SOL (e.g. 1, 0.5)")
     .action(async (opts) => {
       const root = cmd.parent!.opts();
       const { provider, keypair } = createProvider(root.rpc, root.keypair);
       const program = createProgram(provider, root.programId);
       const [depositPda] = findDepositPda(keypair.publicKey, program.programId);
 
+      const lamports = Math.round(parseFloat(opts.amount) * LAMPORTS_PER_SOL);
       const sig = await (program.methods as any)
-        .depositFunds(new BN(opts.amount))
+        .depositFunds(new BN(lamports))
         .accounts({
           advertiser: keypair.publicKey,
           depositAccount: depositPda,
@@ -29,7 +30,7 @@ export function registerAdvertiserCommands(parent: Command) {
         .rpc();
 
       display(root.json, {
-        message: `Deposited ${opts.amount} lamports`,
+        message: `Deposited ${opts.amount} SOL`,
         deposit_pda: depositPda.toBase58(),
         signature: sig,
       });
@@ -39,8 +40,8 @@ export function registerAdvertiserCommands(parent: Command) {
     .command("register-ad")
     .description("Register a new ad")
     .requiredOption("--index <n>", "Ad index")
-    .requiredOption("--budget <lamports>", "Budget in lamports")
-    .requiredOption("--max-cpm <lamports>", "Max CPM in lamports")
+    .requiredOption("--budget <sol>", "Budget in SOL (e.g. 0.5)")
+    .requiredOption("--max-cpm <sol>", "Max CPM in SOL per 1000 impressions (e.g. 0.01)")
     .requiredOption("--max-screener-share <bps>", "Max screener share in bps")
     .requiredOption("--screeners <pubkeys>", "Comma-separated screener pubkeys")
     .option("--excluded-curators <pubkeys>", "Comma-separated excluded curator pubkeys", "")
@@ -59,8 +60,8 @@ export function registerAdvertiserCommands(parent: Command) {
       const sig = await (program.methods as any)
         .registerAd(
           new BN(adIndex),
-          new BN(opts.budget),
-          new BN(opts.maxCpm),
+          new BN(Math.round(parseFloat(opts.budget) * LAMPORTS_PER_SOL)),
+          new BN(Math.round(parseFloat(opts.maxCpm) * LAMPORTS_PER_SOL)),
           parseInt(opts.maxScreenerShare),
           screeners,
           excluded,

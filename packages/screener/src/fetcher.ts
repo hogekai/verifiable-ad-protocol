@@ -1,6 +1,6 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { Program, AnchorProvider } from "@coral-xyz/anchor";
-import IDL from "./idl/verifiable_ad_protocol.json" with { type: "json" };
+import { IDL } from "@verifiable-ad-protocol/core";
 
 export interface OnChainAd {
   publicKey: PublicKey;

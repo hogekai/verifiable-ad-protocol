@@ -9,7 +9,7 @@ export function registerScreenerCommands(parent: Command) {
 
   cmd
     .command("register")
-    .description("Register as a screener")
+    .description("Register as a screener (Phase 1: no stake required)")
     .requiredOption("--share-bps <n>", "Declared share in basis points")
     .option("--endorsed-curators <pubkeys>", "Comma-separated curator pubkeys", "")
     .action(async (opts) => {
@@ -41,7 +41,7 @@ export function registerScreenerCommands(parent: Command) {
 
   cmd
     .command("sync-ads")
-    .description("Sync ads from on-chain to local DB")
+    .description("Sync ads from on-chain to local DB (Phase 1: full table scan)")
     .requiredOption("--db-path <path>", "SQLite DB path")
     .action(async (opts) => {
       const root = cmd.parent!.opts();

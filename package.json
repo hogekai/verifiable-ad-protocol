@@ -7,7 +7,8 @@
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "demo:e2e": "npx tsx demo/e2e.ts"
+    "demo:e2e": "npx tsx demo/e2e.ts",
+    "build:anchor": "anchor build && cp target/idl/verifiable_ad_protocol.json packages/core/src/idl/"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.1"

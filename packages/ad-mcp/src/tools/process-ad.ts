@@ -19,9 +19,9 @@ import {
   BITS_PER_BITMAP,
 } from "@verifiable-ad-protocol/core";
 import type { AdSlot, ImpressionMessage } from "@verifiable-ad-protocol/core";
+import { IDL } from "@verifiable-ad-protocol/core";
 import type { WalletProvider } from "../wallet-provider.js";
 import type { RetryQueue } from "../retry-queue.js";
-import IDL from "../idl/verifiable_ad_protocol.json" with { type: "json" };
 
 /**
  * Process an ad slot: sign + build tx + submit via wallet.

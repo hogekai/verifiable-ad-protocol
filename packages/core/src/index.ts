@@ -27,3 +27,6 @@ export {
 } from "./constants.js";
 
 export { validateAdSlot } from "./validation.js";
+
+import _IDL from "./idl/verifiable_ad_protocol.json" with { type: "json" };
+export const IDL = _IDL;

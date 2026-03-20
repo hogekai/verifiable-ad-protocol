@@ -29,8 +29,7 @@ import {
 import { Program, AnchorProvider } from "@coral-xyz/anchor";
 import BN from "bn.js";
 import { createHash } from "crypto";
-import IDL from "../packages/ad-mcp/src/idl/verifiable_ad_protocol.json" with { type: "json" };
-import { PROGRAM_ID, BITS_PER_BITMAP } from "@verifiable-ad-protocol/core";
+import { PROGRAM_ID, BITS_PER_BITMAP, IDL } from "@verifiable-ad-protocol/core";
 
 // ── Config ────────────────────────────────────────────────────
 
@@ -94,11 +93,12 @@ async function main() {
   const screener = Keypair.generate();
   const curator = Keypair.generate();
   const agent = Keypair.generate();
-  ok("5 keypairs generated");
+  const treasury = Keypair.generate();
+  ok("6 keypairs generated");
 
   // Step 2: Airdrop
   log("2", "Funding keypairs...");
-  for (const kp of [authority, advertiser, screener, curator, agent]) {
+  for (const kp of [authority, advertiser, screener, curator, agent, treasury]) {
     const sig = await connection.requestAirdrop(kp.publicKey, AIRDROP_AMOUNT);
     await connection.confirmTransaction(sig, "confirmed");
   }
@@ -132,14 +132,14 @@ async function main() {
   // Step 3: Initialize ProtocolConfig
   log("3", "Initializing ProtocolConfig...");
   await (programFor(authority).methods as any)
-    .initializeConfig(50, authority.publicKey)
+    .initializeConfig(50, treasury.publicKey)
     .accounts({
       authority: authority.publicKey,
       protocolConfig: configPda,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
-  ok("Protocol fee: 0.5%, Treasury: authority");
+  ok(`Protocol fee: 0.5%, Treasury: ${treasury.publicKey.toBase58().slice(0, 12)}...`);
 
   // Step 4: Advertiser deposit + register ad
   log("4", "Advertiser: deposit + register ad...");
@@ -220,7 +220,7 @@ async function main() {
   // Get balances before
   const screenerBalBefore = await connection.getBalance(screener.publicKey);
   const curatorBalBefore = await connection.getBalance(curator.publicKey);
-  const authorityBalBefore = await connection.getBalance(authority.publicKey);
+  const treasuryBalBefore = await connection.getBalance(treasury.publicKey);
   const depositBalBefore = await connection.getBalance(depositPda);
 
   // Build Ed25519 verify instructions + record_impression
@@ -239,7 +239,7 @@ async function main() {
       protocolConfig: configPda,
       screenerWallet: screener.publicKey,
       curatorWallet: curator.publicKey,
-      protocolTreasury: authority.publicKey,
+      protocolTreasury: treasury.publicKey,
       instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
       payer: agent.publicKey,
       systemProgram: SystemProgram.programId,
@@ -271,7 +271,7 @@ async function main() {
   // Reward distribution
   const screenerBalAfter = await connection.getBalance(screener.publicKey);
   const curatorBalAfter = await connection.getBalance(curator.publicKey);
-  const authorityBalAfter = await connection.getBalance(authority.publicKey);
+  const treasuryBalAfter = await connection.getBalance(treasury.publicKey);
   const depositBalAfter = await connection.getBalance(depositPda);
 
   if (screenerBalAfter - screenerBalBefore !== screenerReward) throw new Error("screener reward mismatch");
@@ -280,7 +280,7 @@ async function main() {
   if (curatorBalAfter - curatorBalBefore !== curatorReward) throw new Error("curator reward mismatch");
   ok(`Curator reward: ${curatorReward} lamports`);
 
-  if (authorityBalAfter - authorityBalBefore !== protocolFee) throw new Error("protocol fee mismatch");
+  if (treasuryBalAfter - treasuryBalBefore !== protocolFee) throw new Error("protocol fee mismatch");
   ok(`Protocol fee: ${protocolFee} lamports`);
 
   if (depositBalBefore - depositBalAfter !== perImpression + submissionFee) throw new Error("deposit deduction mismatch");

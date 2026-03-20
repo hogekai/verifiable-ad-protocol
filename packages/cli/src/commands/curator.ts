@@ -9,7 +9,7 @@ export function registerCuratorCommands(parent: Command) {
 
   cmd
     .command("register")
-    .description("Register as a curator")
+    .description("Register as a curator (Phase 1: no stake required)")
     .requiredOption("--metadata-uri <uri>", "Metadata URI")
     .option("--rate-limit <n>", "Max impressions per rate limit window", "100")
     .action(async (opts) => {
