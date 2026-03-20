@@ -1,0 +1,21 @@
+[package]
+name = "verifiable-ad-protocol"
+version = "0.1.0"
+description = "Verifiable Ad Delivery Protocol on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "verifiable_ad_protocol"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+init-if-needed = []
+
+[dependencies]
+anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
