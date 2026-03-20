@@ -24,13 +24,16 @@ pub mod verifiable_ad_protocol {
         ctx: Context<InitializeConfig>,
         protocol_fee_bps: u16,
         treasury: Pubkey,
+        submission_fee_lamports: u64,
     ) -> Result<()> {
         require!(protocol_fee_bps <= 10000, ProtocolError::InvalidShareBps);
+        require!(submission_fee_lamports > 0, ProtocolError::ZeroBudget);
 
         let config = &mut ctx.accounts.protocol_config;
         config.authority = ctx.accounts.authority.key();
         config.protocol_fee_bps = protocol_fee_bps;
         config.treasury = treasury;
+        config.submission_fee_lamports = submission_fee_lamports;
         config.bump = ctx.bumps.protocol_config;
         Ok(())
     }
@@ -203,6 +206,22 @@ pub mod verifiable_ad_protocol {
         Ok(())
     }
 
+    pub fn update_config(
+        ctx: Context<UpdateConfig>,
+        protocol_fee_bps: u16,
+        treasury: Pubkey,
+        submission_fee_lamports: u64,
+    ) -> Result<()> {
+        require!(protocol_fee_bps <= 10000, ProtocolError::InvalidShareBps);
+        require!(submission_fee_lamports > 0, ProtocolError::ZeroBudget);
+
+        let config = &mut ctx.accounts.protocol_config;
+        config.protocol_fee_bps = protocol_fee_bps;
+        config.treasury = treasury;
+        config.submission_fee_lamports = submission_fee_lamports;
+        Ok(())
+    }
+
     pub fn initialize_bitmap(
         ctx: Context<InitializeBitmap>,
         chunk_index: u16,
@@ -333,8 +352,9 @@ pub mod verifiable_ad_protocol {
         require!(new_spent <= ad.budget_lamports, ProtocolError::InsufficientBudget);
 
         // Deposit must cover both rewards AND submission fee
+        let submission_fee = ctx.accounts.protocol_config.submission_fee_lamports;
         let total_deduction = per_impression
-            .checked_add(SUBMISSION_FEE_LAMPORTS)
+            .checked_add(submission_fee)
             .ok_or(ProtocolError::ArithmeticOverflow)?;
         let deposit_lamports = ctx.accounts.deposit_account.to_account_info().lamports();
         let rent = Rent::get()?;
@@ -369,9 +389,9 @@ pub mod verifiable_ad_protocol {
 
         // ── 6b. Submission fee to payer ───────────────────────────────
         **ctx.accounts.deposit_account.to_account_info().try_borrow_mut_lamports()? -=
-            SUBMISSION_FEE_LAMPORTS;
+            submission_fee;
         **ctx.accounts.payer.to_account_info().try_borrow_mut_lamports()? +=
-            SUBMISSION_FEE_LAMPORTS;
+            submission_fee;
 
         // ── 7. State updates ─────────────────────────────────────────
         let ad = &mut ctx.accounts.ad_account;
@@ -522,6 +542,19 @@ pub struct UpdateCurator<'info> {
         bump = curator_account.bump
     )]
     pub curator_account: Account<'info, CuratorAccount>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        has_one = authority @ ProtocolError::Unauthorized,
+        seeds = [b"config"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
 }
 
 #[derive(Accounts)]

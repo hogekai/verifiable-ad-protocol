@@ -84,7 +84,7 @@ describe("verifiable-ad-protocol", () => {
       const [configPda] = findConfigPda();
 
       await program.methods
-        .initializeConfig(50, treasury.publicKey)
+        .initializeConfig(50, treasury.publicKey, new BN(5_000))
         .accounts({
           authority: authority.publicKey,
           protocolConfig: configPda,
@@ -101,6 +101,7 @@ describe("verifiable-ad-protocol", () => {
       expect(config.treasury.toString()).to.equal(
         treasury.publicKey.toString()
       );
+      expect(config.submissionFeeLamports.toNumber()).to.equal(5_000);
     });
 
     it("fails when called a second time (PDA already exists)", async () => {
@@ -108,7 +109,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .initializeConfig(50, treasury.publicKey)
+          .initializeConfig(50, treasury.publicKey, new BN(5_000))
           .accounts({
             authority: authority.publicKey,
             protocolConfig: configPda,
@@ -128,7 +129,7 @@ describe("verifiable-ad-protocol", () => {
 
       try {
         await program.methods
-          .initializeConfig(10001, treasury.publicKey)
+          .initializeConfig(10001, treasury.publicKey, new BN(5_000))
           .accounts({
             authority: newAuthority.publicKey,
             protocolConfig: findConfigPda()[0],
@@ -578,7 +579,96 @@ describe("verifiable-ad-protocol", () => {
     });
   });
 
-  // ─── 10. record_impression (Sub-phase 2) ──────────────────────────────────
+  // ─── 10. update_config ──────────────────────────────────────────────────
+
+  describe("update_config", () => {
+    it("updates config successfully", async () => {
+      const [configPda] = findConfigPda();
+      const newTreasury = Keypair.generate();
+
+      await program.methods
+        .updateConfig(100, newTreasury.publicKey, new BN(10_000))
+        .accounts({
+          authority: authority.publicKey,
+          protocolConfig: configPda,
+        })
+        .signers([authority])
+        .rpc();
+
+      const config = await program.account.protocolConfig.fetch(configPda);
+      expect(config.protocolFeeBps).to.equal(100);
+      expect(config.treasury.toString()).to.equal(newTreasury.publicKey.toString());
+      expect(config.submissionFeeLamports.toNumber()).to.equal(10_000);
+
+      // Restore original values for subsequent tests
+      await program.methods
+        .updateConfig(50, treasury.publicKey, new BN(5_000))
+        .accounts({
+          authority: authority.publicKey,
+          protocolConfig: configPda,
+        })
+        .signers([authority])
+        .rpc();
+    });
+
+    it("fails when non-authority tries to update", async () => {
+      const [configPda] = findConfigPda();
+      const imposter = Keypair.generate();
+      await airdrop(imposter.publicKey);
+
+      try {
+        await program.methods
+          .updateConfig(50, treasury.publicKey, new BN(5_000))
+          .accounts({
+            authority: imposter.publicKey,
+            protocolConfig: configPda,
+          })
+          .signers([imposter])
+          .rpc();
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err).to.exist;
+      }
+    });
+
+    it("fails with protocol_fee_bps > 10000", async () => {
+      const [configPda] = findConfigPda();
+
+      try {
+        await program.methods
+          .updateConfig(10001, treasury.publicKey, new BN(5_000))
+          .accounts({
+            authority: authority.publicKey,
+            protocolConfig: configPda,
+          })
+          .signers([authority])
+          .rpc();
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("InvalidShareBps");
+      }
+    });
+
+    it("fails with submission_fee_lamports = 0", async () => {
+      const [configPda] = findConfigPda();
+
+      try {
+        await program.methods
+          .updateConfig(50, treasury.publicKey, new BN(0))
+          .accounts({
+            authority: authority.publicKey,
+            protocolConfig: configPda,
+          })
+          .signers([authority])
+          .rpc();
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("ZeroBudget");
+      }
+    });
+  });
+
+  // ─── 11. record_impression (Sub-phase 2) ──────────────────────────────────
 
   describe("record_impression", () => {
     const BITS_PER_BITMAP = 8192;
